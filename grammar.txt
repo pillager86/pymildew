@@ -32,5 +32,5 @@ expr            ::=     NOT expr |
                         expr OR expr |
                         IDENTIFIER EQ expr
 
-primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE | (KEYWORD:true|KEYWORD:false) | IDENTIFIER
+primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE | (KEYWORD:true|KEYWORD:false) | STRING | IDENTIFIER
                         

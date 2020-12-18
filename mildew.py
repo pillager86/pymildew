@@ -3,10 +3,13 @@
 ###############################################################################
 
 class Interpreter:
+    '''Holds a context for variables and evaluates expressions'''
     def __init__(self):
+        '''Constructs a new Interpreter with a global context to store all variables for now'''
         self.global_context = Context(None)
 
     def evaluate(self, text):
+        '''Evaluates a single expression (for now)'''
         lexer = Lexer(text)
         token = lexer.next_token()
         while(token.type != TT_EOF):
@@ -22,6 +25,7 @@ class Interpreter:
         if isinstance(tree, LiteralNode):
             return tree.value
         elif isinstance(tree, UnaryOpNode):
+            # TODO: refactor, collect node value up front and check to make sure unary op makes sense for type
             if tree.op_token.type == TT_NOT:
                 return not self._visit(tree.node)
             elif tree.op_token.type == TT_DASH:
@@ -31,44 +35,57 @@ class Interpreter:
             else:
                 raise ScriptRuntimeError(tree, "Unknown unary operator")
         elif isinstance(tree, BinaryOpNode):
+            left_value = self._visit(tree.left_node)
+            right_value = self._visit(tree.right_node)
+            result = UNDEFINED
+
             if tree.op_token.type == TT_OR:
-                return self._visit(tree.left_node) or self._visit(tree.right_node)
+                result = left_value or right_value
             elif tree.op_token.type == TT_AND:
-                return self._visit(tree.left_node) and self._visit(tree.right_node)
+                result = left_value and right_value
     
             elif tree.op_token.type == TT_LT:
-                return self._visit(tree.left_node) < self._visit(tree.right_node)
+                result = typesafe_lt(left_value, right_value)
             elif tree.op_token.type == TT_LE:
-                return self._visit(tree.left_node) <= self._visit(tree.right_node)
+                result = typesafe_le(left_value, right_value)
             elif tree.op_token.type == TT_GT:
-                return self._visit(tree.left_node) > self._visit(tree.right_node)
+                result = typesafe_gt(left_value, right_value)
             elif tree.op_token.type == TT_GE:
-                return self._visit(tree.left_node) >= self._visit(tree.right_node)
+                result = typesafe_ge(left_value, right_value)
             elif tree.op_token.type == TT_EQUALS:
-                return self._visit(tree.left_node) == self._visit(tree.right_node)
+                result = typesafe_eq(left_value, right_value)
             elif tree.op_token.type == TT_NEQUALS:
-                return self._visit(tree.left_node) != self._visit(tree.right_node)
+                result = not typesafe_eq(left_value, right_value)
 
             elif tree.op_token.type == TT_PLUS:
-                return self._visit(tree.left_node) + self._visit(tree.right_node)
+                result = typesafe_add(left_value, right_value)
             elif tree.op_token.type == TT_DASH:
-                return self._visit(tree.left_node) - self._visit(tree.right_node)
+                result = typesafe_sub(left_value, right_value)
             elif tree.op_token.type == TT_STAR:
-                return self._visit(tree.left_node) * self._visit(tree.right_node)
+                result = typesafe_mul(left_value, right_value)
             elif tree.op_token.type == TT_FSLASH:
-                return self._visit(tree.left_node) / self._visit(tree.right_node)
+                result = typesafe_div(left_value, right_value)
             elif tree.op_token.type == TT_PERCENT:
-                return self._visit(tree.left_node) % self._visit(tree.right_node)
+                result = typesafe_mod(left_value, right_value)
             elif tree.op_token.type == TT_POW:
-                return self._visit(tree.left_node) ** self._visit(tree.right_node)
+                result = typesafe_pow(left_value, right_value)
             else:
                 raise ScriptRuntimeError(tree, "Unsupported binary operation")
+
+            if result is UNDEFINED: # TODO propagate undefined value through operations
+                raise ScriptRuntimeError(tree, "Type mismatch in binary operation")
+
+            if result is INFINITY:
+                raise ScriptRuntimeError(tree, "Division by zero error")
+
+            return result
         elif isinstance(tree, VarAccessNode):
             result = self.global_context.get_variable(tree.id_token.text)
-            if result is None:
+            if result is UNDEFINED:
                 raise ScriptRuntimeError(tree, "Undefined variable accessed")
             return result
         elif isinstance(tree, VarAssignmentNode):
+            # TODO handle decrement and increment -= += assignments as well
             return self.global_context.set_variable(tree.var_token.text, self._visit(tree.right_node))
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type")
@@ -135,9 +152,12 @@ KEYWORDS = [ KW_TRUE, KW_FALSE ]
 # LEXER CLASSES
 ###############################################################################
 
+ESCAPE_CHARS = {
+    'n': '\n', 't': '\t', 'r': '\r' # TODO add complete set
+}
+
 class Position:
     def __init__(self, line, column):
-        # add 1 for human readability
         self.line = line
         self.column = column
 
@@ -233,6 +253,20 @@ class Lexer:
                 token = Token(TT_INTEGER, startpos, text)
             else:
                 token = Token(TT_DOUBLE, startpos, text)
+        # check for string literal
+        elif self._current_char() == "'" or self._current_char() == '"':
+            closing_quote = self._current_char()
+            startpos = self.position.copy()
+            self._advance_char()
+            start = self._char_counter
+            while self._current_char() != closing_quote and self._current_char() != '\0':
+                # TODO handle '\\' + escape chars
+                if self._current_char() == '\0':
+                    raise LexerError(startpos, "Missing closing quotation mark for string literal")
+                self._advance_char()
+            text = self._text[start:self._char_counter]
+            token = Token(TT_STRING, startpos, text)
+            
         # LOGIC OPERATORS
         elif self._current_char() == '>':
             if self._peek_char() == '=':
@@ -351,6 +385,7 @@ class Parser:
 
     # build a tree and return it
     def parse(self):
+        # TODO parse semicolon separated statements instead of one expression
         left = self._expr()
         if self._current_token.type != TT_EOF: # no trailing garbage allowed
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token after expression")
@@ -368,7 +403,8 @@ class Parser:
             self._advance()
             assign_token = self._current_token
             self._advance()
-            right = self._expr(parent_precedence)
+            # right = self._expr(parent_precedence)
+            right = self._expr(binary_op_priority(assign_token))
             left = VarAssignmentNode(assign_token, var_token, right)
             return left
 
@@ -381,6 +417,7 @@ class Parser:
         else:
             left = self._primary_expr()
         
+        # cheap hack to make sure no attempt to assign to an lvalue
         if self._current_token.type == TT_ASSIGN:
             raise ParseError(self._current_token.position, self._current_token, "Cannot assign to an lvalue")
 
@@ -392,6 +429,7 @@ class Parser:
             right = self._expr(prec)
             left = BinaryOpNode(token, left, right)
 
+        # handle normal binary operations with priority and left-associativity
         while True:
             prec = binary_op_priority(self._current_token)
             if prec == 0 or prec <= parent_precedence:
@@ -425,6 +463,9 @@ class Parser:
                 left = LiteralNode(False)
             else:
                 raise ParseError(self._current_token.position, self._current_token, "Unexpected keyword")
+            self._advance()
+        elif self._current_token.type == TT_STRING:
+            left = LiteralNode(self._current_token.text)
             self._advance()
         elif self._current_token.type == TT_IDENTIFIER:
             left = VarAccessNode(self._current_token)
@@ -479,10 +520,93 @@ class VarAssignmentNode:
         return f"({self.var_token} {self.op_token} {self.right_node})"
 
 ###############################################################################
+# TYPESAFE OPERATIONS
+###############################################################################
+
+# TODO propagate undefined value through operations
+
+def typesafe_add(left, right):
+    if type(left) == str or type(right) == str:
+        return str(left) + str(right)
+    else:
+        return left + right
+
+def typesafe_sub(left, right):
+    if type(left) == str or type(right) == str:
+        return UNDEFINED
+    else:
+        return left - right
+
+def typesafe_mul(left, right):
+    if type(left) == str or type(right) == str:
+        return UNDEFINED
+    else:
+        return left * right
+
+def typesafe_div(left, right):
+    if type(left) == str or type(right) == str:
+        return UNDEFINED
+    elif right == 0:
+        return INFINITY
+    else:
+        return left / right
+
+def typesafe_mod(left, right):
+    if type(left) == str or type(right) == str:
+        return UNDEFINED
+    else:
+        return left % right
+
+def typesafe_pow(left, right):
+    if type(left) == str or type(right) == str:
+        return UNDEFINED
+    else:
+        return left ** right
+
+def typesafe_eq(left, right):
+    return left == right
+
+def typesafe_lt(left, right):
+    if type(left) == str or type(right) == str:
+        return str(left) < str(right)
+    else:
+        return left < right
+
+def typesafe_le(left, right):
+    if type(left) == str or type(right) == str:
+        return str(left) <= str(right)
+    else:
+        return left <= right
+
+def typesafe_gt(left, right):
+    if type(left) == str or type(right) == str:
+        return str(left) > str(right)
+    else:
+        return left > right
+
+def typesafe_ge(left, right):
+    if type(left) == str or type(right) == str:
+        return str(left) >= str(right)
+    else:
+        return left >= right
+
+class Undefined:
+    def __repr__(self):
+        return "undefined"
+
+UNDEFINED = Undefined()
+
+class Infinity:
+    def __repr__(self):
+        return "infinity"
+
+INFINITY = Infinity()
+
+###############################################################################
 # RUNTIME CONTEXT
 ###############################################################################
 
-class Context:
+class Context: # TODO possible rename to ScriptContext for clarity
     def __init__(self, parent=None):
         self.parent = parent
         self.variables = {}
@@ -492,7 +616,7 @@ class Context:
         if name in self.variables:
             return self.variables[name]
         else:
-            return None
+            return UNDEFINED
 
     def set_variable(self, name, value):
         # for now just set in current context
