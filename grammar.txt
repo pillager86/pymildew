@@ -15,6 +15,8 @@
 
 6   OR
 
+3   ASSIGN (right-assoc)
+
 
 # GRAMMAR
 
@@ -27,7 +29,8 @@ expr            ::=     NOT expr |
                         expr (LT|LE|GT|GE) expr |
                         expr EQUALS expr
                         expr AND expr |
-                        expr OR expr
+                        expr OR expr |
+                        IDENTIFIER EQ expr
 
 primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE | (KEYWORD:true|KEYWORD:false) | IDENTIFIER
                         

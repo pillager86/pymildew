@@ -3,6 +3,9 @@
 ###############################################################################
 
 class Interpreter:
+    def __init__(self):
+        self.global_context = Context(None)
+
     def evaluate(self, text):
         lexer = Lexer(text)
         token = lexer.next_token()
@@ -60,46 +63,17 @@ class Interpreter:
                 return self._visit(tree.left_node) ** self._visit(tree.right_node)
             else:
                 raise ScriptRuntimeError(tree, "Unsupported binary operation")
+        elif isinstance(tree, VarAccessNode):
+            result = self.global_context.get_variable(tree.id_token.text)
+            if result is None:
+                raise ScriptRuntimeError(tree, "Undefined variable accessed")
+            return result
+        elif isinstance(tree, VarAssignmentNode):
+            return self.global_context.set_variable(tree.var_token.text, self._visit(tree.right_node))
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type")
         
         return None
-
-###############################################################################
-# TOKEN TYPE ENUM
-###############################################################################
-TT_EOF              = "EOF"
-TT_KEYWORD          = "KEYWORD"
-TT_INTEGER          = "INTEGER"     
-TT_DOUBLE           = "DOUBLE"       
-TT_STRING           = "STRING"
-TT_KEYWORD          = "KEYWORD"
-TT_IDENTIFIER       = "IDENTIFIER"
-TT_NOT              = "NOT"         # !
-TT_AND              = "AND"         # &&
-TT_OR               = "OR"          # ||
-TT_GT               = "GT"          # >
-TT_GE               = "GE"          # >=
-TT_LT               = "LT"          # <
-TT_LE               = "LE"          # <=
-TT_EQUALS           = "EQUALS"      # ==
-TT_NEQUALS          = "NEQUALS"     # !=
-TT_PLUS             = "PLUS"        # +
-TT_DASH             = "DASH"        # -
-TT_STAR             = "STAR"        # *
-TT_FSLASH           = "FSLASH"      # /
-TT_PERCENT          = "PERCENT"     # %
-TT_POW              = "POW"         # **
-TT_LPAREN           = "LPAREN"      # (
-TT_RPAREN           = "RPAREN"      # )
-
-###############################################################################
-# KEYWORDS
-###############################################################################
-KW_TRUE = "true"
-KW_FALSE = "false"
-KEYWORDS = [ KW_TRUE, KW_FALSE ]
-
 
 ###############################################################################
 # ERRORS
@@ -121,6 +95,41 @@ class ScriptRuntimeError(Exception):
         super().__init__(msg)
         self.node = node
 
+###############################################################################
+# TOKEN TYPE ENUM
+###############################################################################
+TT_EOF              = "EOF"
+TT_KEYWORD          = "KEYWORD"
+TT_INTEGER          = "INTEGER"     
+TT_DOUBLE           = "DOUBLE"       
+TT_STRING           = "STRING"
+TT_KEYWORD          = "KEYWORD"
+TT_IDENTIFIER       = "IDENTIFIER"
+TT_NOT              = "NOT"         # !
+TT_AND              = "AND"         # &&
+TT_OR               = "OR"          # ||
+TT_GT               = "GT"          # >
+TT_GE               = "GE"          # >=
+TT_LT               = "LT"          # <
+TT_LE               = "LE"          # <=
+TT_EQUALS           = "EQUALS"      # ==
+TT_NEQUALS          = "NEQUALS"     # !=
+TT_ASSIGN           = "ASSIGN"      # =
+TT_PLUS             = "PLUS"        # +
+TT_DASH             = "DASH"        # -
+TT_STAR             = "STAR"        # *
+TT_FSLASH           = "FSLASH"      # /
+TT_PERCENT          = "PERCENT"     # %
+TT_POW              = "POW"         # **
+TT_LPAREN           = "LPAREN"      # (
+TT_RPAREN           = "RPAREN"      # )
+
+###############################################################################
+# KEYWORDS
+###############################################################################
+KW_TRUE = "true"
+KW_FALSE = "false"
+KEYWORDS = [ KW_TRUE, KW_FALSE ]
 
 ###############################################################################
 # LEXER CLASSES
@@ -201,7 +210,7 @@ class Lexer:
             start = self._char_counter
             startpos = self.position.copy()
             dot_counter = 0
-            # TODO account for D.D*\e(+|-)?D* literals
+            e_counter = 0
             while self._peek_char().isnumeric() or self._peek_char() == '.' or self._peek_char().lower() == 'e':
                 self._advance_char()
                 if self._current_char() == '.':
@@ -209,6 +218,9 @@ class Lexer:
                     if dot_counter > 1:
                         raise LexerError(startpos, "Too many decimals in number literal")
                 elif self._current_char() == 'e':
+                    e_counter += 1
+                    if e_counter > 1:
+                        raise LexerError(startpos, "Number literal may only have one exponent specifier")
                     # is there an optional '-' or '+'
                     if self._peek_char() in ['+', '-']:
                         # safe to ignore, Python's parser will handle it
@@ -239,7 +251,7 @@ class Lexer:
                 self._advance_char()
                 token = Token(TT_EQUALS, self.position)
             else:
-                raise LexerError(self.position, "Assignment operator = not yet supported")
+                token = Token(TT_ASSIGN, self.position)
         elif self._current_char() == '!':
             if self._peek_char() == '=':
                 self._advance_char()
@@ -281,6 +293,7 @@ class Lexer:
         # EOF
         elif self._current_char() == '\0':
             token = Token(TT_EOF, self.position)
+        # keyword or identifier
         elif starts_keyword_or_id(self._current_char()):
             start = self._char_counter
             startpos = self.position.copy()
@@ -304,12 +317,14 @@ class Lexer:
 ###############################################################################
 
 def unary_op_priority(token):
+    # see grammar.txt for explanation of magic constants
     if token.type in [TT_NOT, TT_PLUS, TT_DASH]:
         return 17
     else:
         return 0
 
 def binary_op_priority(token):
+    # see grammar.txt for explanation of magic constants
     if token.type == TT_POW:
         return 16
     elif token.type in [TT_STAR, TT_FSLASH, TT_PERCENT]:
@@ -324,6 +339,8 @@ def binary_op_priority(token):
         return 7
     elif token.type == TT_OR:
         return 6
+    elif token.type == TT_ASSIGN:
+        return 3
     else:
         return 0
 
@@ -336,13 +353,25 @@ class Parser:
     def parse(self):
         left = self._expr()
         if self._current_token.type != TT_EOF: # no trailing garbage allowed
-            raise ParseError(self.lexer.position, self._current_token, "Unexpected token")
+            raise ParseError(self._current_token.position, self._current_token, "Unexpected token after expression")
         return left
 
     # grammar rules
 
     def _expr(self, parent_precedence = 0):
         left = None
+
+        # check for assignment by peeking next token
+        peek = self.lexer.next_token(False)
+        if self._current_token.type == TT_IDENTIFIER and peek.type == TT_ASSIGN:
+            var_token = self._current_token
+            self._advance()
+            assign_token = self._current_token
+            self._advance()
+            right = self._expr(parent_precedence)
+            left = VarAssignmentNode(assign_token, var_token, right)
+            return left
+
         un_op_prec = unary_op_priority(self._current_token)
         if un_op_prec != 0 and un_op_prec >= parent_precedence:
             token = self._current_token
@@ -352,6 +381,9 @@ class Parser:
         else:
             left = self._primary_expr()
         
+        if self._current_token.type == TT_ASSIGN:
+            raise ParseError(self._current_token.position, self._current_token, "Cannot assign to an lvalue")
+
         # cheap hack to enforce right-assoc on POW. TODO implement this with data
         if self._current_token.type == TT_POW:
             prec = binary_op_priority(self._current_token)
@@ -392,10 +424,13 @@ class Parser:
             elif self._current_token.text == KW_FALSE:
                 left = LiteralNode(False)
             else:
-                raise ParseError(self.lexer.position, self._current_token, "Unexpected keyword")
+                raise ParseError(self._current_token.position, self._current_token, "Unexpected keyword")
+            self._advance()
+        elif self._current_token.type == TT_IDENTIFIER:
+            left = VarAccessNode(self._current_token)
             self._advance()
         else:
-            raise ParseError(self.lexer.position, self._current_token, "Unexpected token")
+            raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
         return left
 
     # helper functions
@@ -428,3 +463,38 @@ class LiteralNode:
         self.value = value
     def __repr__(self):
         return str(self.value)
+
+class VarAccessNode:
+    def __init__(self, id_token):
+        self.id_token = id_token
+    def __repr__(self):
+        return f"var '{self.id_token.text}'"
+
+class VarAssignmentNode:
+    def __init__(self, op_token, var_token, right_node):
+        self.op_token = op_token
+        self.var_token = var_token
+        self.right_node = right_node
+    def __repr__(self):
+        return f"({self.var_token} {self.op_token} {self.right_node})"
+
+###############################################################################
+# RUNTIME CONTEXT
+###############################################################################
+
+class Context:
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.variables = {}
+
+    def get_variable(self, name):
+        # for now just look in current context
+        if name in self.variables:
+            return self.variables[name]
+        else:
+            return None
+
+    def set_variable(self, name, value):
+        # for now just set in current context
+        self.variables[name] = value
+        return self.variables[name]
