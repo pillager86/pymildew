@@ -27,11 +27,11 @@ class Interpreter:
         elif isinstance(tree, UnaryOpNode):
             # TODO: refactor, collect node value up front and check to make sure unary op makes sense for type
             if tree.op_token.type == TT_NOT:
-                return not self._visit(tree.node)
+                return typesafe_logical_not(self._visit(tree.node))
             elif tree.op_token.type == TT_DASH:
-                return self._visit(tree.node) * -1
+                return typesafe_unary_minus(self._visit(tree.node))
             elif tree.op_token.type == TT_PLUS:
-                return self._visit(tree.node)
+                return typesafe_unary_plus(self._visit(tree.node))
             else:
                 raise ScriptRuntimeError(tree, "Unknown unary operator")
         elif isinstance(tree, BinaryOpNode):
@@ -40,9 +40,9 @@ class Interpreter:
             result = UNDEFINED
 
             if tree.op_token.type == TT_OR:
-                result = left_value or right_value
+                result = typesafe_logical_or(left_value, right_value)
             elif tree.op_token.type == TT_AND:
-                result = left_value and right_value
+                result = typesafe_logical_and(left_value, right_value)
     
             elif tree.op_token.type == TT_LT:
                 result = typesafe_lt(left_value, right_value)
@@ -55,7 +55,7 @@ class Interpreter:
             elif tree.op_token.type == TT_EQUALS:
                 result = typesafe_eq(left_value, right_value)
             elif tree.op_token.type == TT_NEQUALS:
-                result = not typesafe_eq(left_value, right_value)
+                result = typesafe_neq(left_value, right_value)
 
             elif tree.op_token.type == TT_PLUS:
                 result = typesafe_add(left_value, right_value)
@@ -72,17 +72,12 @@ class Interpreter:
             else:
                 raise ScriptRuntimeError(tree, "Unsupported binary operation")
 
-            if result is UNDEFINED: # TODO propagate undefined value through operations
-                raise ScriptRuntimeError(tree, "Type mismatch in binary operation")
-
             if result is INFINITY:
                 raise ScriptRuntimeError(tree, "Division by zero error")
 
             return result
         elif isinstance(tree, VarAccessNode):
             result = self.global_context.get_variable(tree.id_token.text)
-            if result is UNDEFINED:
-                raise ScriptRuntimeError(tree, "Undefined variable accessed")
             return result
         elif isinstance(tree, VarAssignmentNode):
             # TODO handle decrement and increment -= += assignments as well
@@ -146,7 +141,8 @@ TT_RPAREN           = "RPAREN"      # )
 ###############################################################################
 KW_TRUE = "true"
 KW_FALSE = "false"
-KEYWORDS = [ KW_TRUE, KW_FALSE ]
+KW_UNDEFINED = "undefined"
+KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED ]
 
 ###############################################################################
 # LEXER CLASSES
@@ -461,6 +457,8 @@ class Parser:
                 left = LiteralNode(True)
             elif self._current_token.text == KW_FALSE:
                 left = LiteralNode(False)
+            elif self._current_token.text == KW_UNDEFINED:
+                left = LiteralNode(UNDEFINED)
             else:
                 raise ParseError(self._current_token.position, self._current_token, "Unexpected keyword")
             self._advance()
@@ -523,28 +521,66 @@ class VarAssignmentNode:
 # TYPESAFE OPERATIONS
 ###############################################################################
 
-# TODO propagate undefined value through operations
+# TODO refactor to avoid code duplication
+
+def typesafe_logical_and(left, right):
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    else:
+        return left and right
+
+def typesafe_logical_or(left, right):
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    else:
+        return left or right
+
+def typesafe_logical_not(operand):
+    if operand is UNDEFINED:
+        return UNDEFINED
+    else:
+        return not operand
+
+def typesafe_unary_plus(operand):
+    if operand is UNDEFINED or type(operand) == str:
+        return UNDEFINED
+    else:
+        return operand
+
+def typesafe_unary_minus(operand):
+    if operand is UNDEFINED or type(operand) == str:
+        return UNDEFINED
+    else:
+        return operand * -1
 
 def typesafe_add(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return str(left) + str(right)
     else:
         return left + right
 
 def typesafe_sub(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return UNDEFINED
     else:
         return left - right
 
 def typesafe_mul(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return UNDEFINED
     else:
         return left * right
 
 def typesafe_div(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return UNDEFINED
     elif right == 0:
         return INFINITY
@@ -552,40 +588,61 @@ def typesafe_div(left, right):
         return left / right
 
 def typesafe_mod(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return UNDEFINED
     else:
         return left % right
 
 def typesafe_pow(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return UNDEFINED
     else:
         return left ** right
 
 def typesafe_eq(left, right):
-    return left == right
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    else:
+        return left == right
+
+def typesafe_neq(left, right):
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    else:
+        return left != right
 
 def typesafe_lt(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return str(left) < str(right)
     else:
         return left < right
 
 def typesafe_le(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return str(left) <= str(right)
     else:
         return left <= right
 
 def typesafe_gt(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return str(left) > str(right)
     else:
         return left > right
 
 def typesafe_ge(left, right):
-    if type(left) == str or type(right) == str:
+    if left is UNDEFINED or right is UNDEFINED:
+        return UNDEFINED
+    elif type(left) == str or type(right) == str:
         return str(left) >= str(right)
     else:
         return left >= right
@@ -620,5 +677,10 @@ class Context: # TODO possible rename to ScriptContext for clarity
 
     def set_variable(self, name, value):
         # for now just set in current context
-        self.variables[name] = value
-        return self.variables[name]
+        if value is UNDEFINED:
+            if name in self.variables:
+                del self.variables[name]
+            return UNDEFINED
+        else:
+            self.variables[name] = value
+            return self.variables[name]
