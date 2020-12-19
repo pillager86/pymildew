@@ -20,6 +20,12 @@
 
 # GRAMMAR
 
+program         ::=     statements
+
+statements      ::=     statement*
+
+statement       ::=     expr (SEMICOLON|EOF) | LBRACE statements RBRACE
+
 expr            ::=     NOT expr |
                         (PLUS|DASH) expr |
                         primary-expr |
@@ -30,7 +36,7 @@ expr            ::=     NOT expr |
                         expr EQUALS expr
                         expr AND expr |
                         expr OR expr |
-                        IDENTIFIER EQ expr
+                        IDENTIFIER EQ expr # TODO: make this separate rule
 
 primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE | (KEYWORD:true|KEYWORD:false|KEYWORD:undefined) | STRING | IDENTIFIER
                         

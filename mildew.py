@@ -6,7 +6,8 @@ class Interpreter:
     '''Holds a context for variables and evaluates expressions'''
     def __init__(self):
         '''Constructs a new Interpreter with a global context to store all variables for now'''
-        self.global_context = Context(None)
+        self.global_context = ScriptContext(None)
+        self.current_context = None # for now
 
     def evaluate(self, text):
         '''Evaluates a single expression (for now)'''
@@ -78,6 +79,8 @@ class Interpreter:
             return result
         elif isinstance(tree, VarAccessNode):
             result = self.global_context.get_variable(tree.id_token.text)
+            if result is UNDEFINED:
+                raise ScriptRuntimeError(tree, "Undefined variable")
             return result
         elif isinstance(tree, VarAssignmentNode):
             # TODO handle decrement and increment -= += assignments as well
@@ -135,6 +138,9 @@ TT_PERCENT          = "PERCENT"     # %
 TT_POW              = "POW"         # **
 TT_LPAREN           = "LPAREN"      # (
 TT_RPAREN           = "RPAREN"      # )
+TT_LBRACE           = "LBRACE"      # {
+TT_RBRACE           = "RBRACE"      # }
+TT_SEMICOLON        = "SEMICOLON"   # ;
 
 ###############################################################################
 # KEYWORDS
@@ -149,7 +155,10 @@ KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED ]
 ###############################################################################
 
 ESCAPE_CHARS = {
-    'n': '\n', 't': '\t', 'r': '\r' # TODO add complete set
+    'b': '\b', 'f': '\f',
+    'n': '\n', 'r': '\r', 't': '\t', 
+    'v': '\v', '0': '\0', "'": '\'',
+    '"': '\"', '\\': '\\'
 }
 
 class Position:
@@ -255,13 +264,20 @@ class Lexer:
             startpos = self.position.copy()
             self._advance_char()
             start = self._char_counter
-            while self._current_char() != closing_quote and self._current_char() != '\0':
-                # TODO handle '\\' + escape chars
+            result = ""
+            while self._current_char() != closing_quote:
                 if self._current_char() == '\0':
-                    raise LexerError(startpos, "Missing closing quotation mark for string literal")
+                    raise LexerError(self.position, "Missing closing quotation mark for string literal")
+                elif self._current_char() == '\\':
+                    self._advance_char()
+                    if self._current_char() in ESCAPE_CHARS:
+                        result += ESCAPE_CHARS[self._current_char()]
+                    else:
+                        raise LexerError(self.position, "Unknown escape char `" + self._current_char + "`")
+                else:
+                    result += self._current_char()
                 self._advance_char()
-            text = self._text[start:self._char_counter]
-            token = Token(TT_STRING, startpos, text)
+            token = Token(TT_STRING, startpos, result)
             
         # LOGIC OPERATORS
         elif self._current_char() == '>':
@@ -320,6 +336,13 @@ class Lexer:
             token = Token(TT_LPAREN, self.position)
         elif self._current_char() == ')':
             token = Token(TT_RPAREN, self.position)
+        # STATEMENT TOKENS
+        elif self._current_char() == '{':
+            token = Token(TT_LBRACE, self.position)
+        elif self._current_char() == '}':
+            token = Token(TT_RBRACE, self.position)
+        elif self._current_char() == ';':
+            token = Token(TT_SEMICOLON, self.position)
         # EOF
         elif self._current_char() == '\0':
             token = Token(TT_EOF, self.position)
@@ -393,6 +416,7 @@ class Parser:
         left = None
 
         # check for assignment by peeking next token
+        # TODO make this a separate grammar rule once statements are introduced
         peek = self.lexer.next_token(False)
         if self._current_token.type == TT_IDENTIFIER and peek.type == TT_ASSIGN:
             var_token = self._current_token
@@ -663,7 +687,7 @@ INFINITY = Infinity()
 # RUNTIME CONTEXT
 ###############################################################################
 
-class Context: # TODO possible rename to ScriptContext for clarity
+class ScriptContext:
     def __init__(self, parent=None):
         self.parent = parent
         self.variables = {}
@@ -684,3 +708,7 @@ class Context: # TODO possible rename to ScriptContext for clarity
         else:
             self.variables[name] = value
             return self.variables[name]
+
+    def var_exists(self, name):
+        # for now only check current context
+        return name in self.variables
