@@ -5,12 +5,12 @@
 class Interpreter:
     '''Holds a context for variables and evaluates expressions'''
     def __init__(self):
-        '''Constructs a new Interpreter with a global context to store all variables for now'''
+        '''Constructs a new Interpreter'''
         self.global_context = ScriptContext(None)
         self.current_context = self.global_context
 
     def evaluate(self, text):
-        '''Evaluates a single expression (for now)'''
+        '''Evaluates a set of statements'''
         # create a context just for this evaluate
         self.current_context = ScriptContext(self.current_context)
         lexer = Lexer(text)
@@ -120,6 +120,8 @@ class Interpreter:
                     value = self._visit(tree.expression_nodes[i])
                 declfunc(tree.var_tokens[i].text, value)
             result = UNDEFINED # this type of expression cannot evaluate to anything
+        elif tree is None:
+            return UNDEFINED # nothing to do
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
@@ -153,7 +155,6 @@ TT_KEYWORD          = "KEYWORD"
 TT_INTEGER          = "INTEGER"     
 TT_DOUBLE           = "DOUBLE"       
 TT_STRING           = "STRING"
-TT_KEYWORD          = "KEYWORD"
 TT_IDENTIFIER       = "IDENTIFIER"
 TT_NOT              = "NOT"         # !
 TT_AND              = "AND"         # &&
@@ -308,7 +309,6 @@ class Lexer:
             closing_quote = self._current_char()
             startpos = self.position.copy()
             self._advance_char()
-            start = self._char_counter
             result = ""
             while self._current_char() != closing_quote:
                 if self._current_char() == '\0':
@@ -502,6 +502,10 @@ class Parser:
                 raise ParseError(self.lexer.position, self._current_token, "Expected '}'")
             self._advance()                
             statement_node = BlockNode(stmts)
+        # could be an empty statement
+        elif self._current_token.type == TT_SEMICOLON:
+            self._advance()
+            statement_node = ExpressionStatementNode(None)
         # else it has to be an expression followed by a semicolon
         else:
             statement_node = ExpressionStatementNode(self._expr())
@@ -591,7 +595,7 @@ class Parser:
         elif self._current_token.type == TT_IDENTIFIER:
             left = VarAccessNode(self._current_token)
             self._advance()
-        elif self._current_token.type != TT_RBRACE:
+        else:
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
         return left
 
@@ -803,16 +807,24 @@ def typesafe_ge(left, right):
     else:
         return left >= right
 
+# singleton for default values of uninitialized variables. propagates through typesafe_ operations
 class Undefined:
     def __repr__(self):
         return "undefined"
 
 UNDEFINED = Undefined()
 
+# TODO propagate positive or negative Infinity through math ops instead of erroring out
 class Infinity:
+    def __init__(self, is_negative=False):
+        self.is_negative = is_negative
     def __repr__(self):
-        return "infinity"
+        if not self.is_negative:
+            return "Infinity"
+        else:
+            return "-Infinity"
 
+# TODO rather than use this singleton, check for isinstance(Infinity) when propagating Infinity value from division by zero
 INFINITY = Infinity()
 
 ###############################################################################
