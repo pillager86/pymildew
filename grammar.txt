@@ -28,7 +28,7 @@ statement       ::=     var-decl SEMICOLON
 
 block           ::=     LBRACE statement* RBRACE
 
-var-decl        ::=     (KEYWORD:var|KEYWORD:let) IDENTIFIER (EQ expr)?
+var-decl        ::=     (KEYWORD:var|KEYWORD:let) IDENTIFIER (EQ expr)? (COMMA IDENTIFIER (EQ expr)?)*
 
 expr            ::=     (NOT|PLUS|DASH) expr |
                         primary-expr |

@@ -85,7 +85,7 @@ class Interpreter:
             return result
         elif isinstance(tree, VarAccessNode):
             result = self.current_context.access_variable(tree.id_token.text)
-            if result is UNDEFINED:
+            if not self.current_context.var_exists(tree.id_token.text):
                 raise ScriptRuntimeError(tree, "Undefined variable")
             return result
         elif isinstance(tree, VarAssignmentNode):
@@ -96,20 +96,30 @@ class Interpreter:
                 return self.current_context.reassign_variable(tree.var_token.text, self._visit(tree.right_node))
         elif isinstance(tree, ExpressionStatementNode):
             result = self._visit(tree.node)
-            print("Statement result: " + str(result)) # temporary
+            print("Expression statement result: " + str(result)) # temporary
         elif isinstance(tree, BlockNode):
             self.current_context = ScriptContext(self.current_context)
             for each_node in tree.statement_nodes:
                 result = self._visit(each_node)
             self.current_context = self.current_context.parent
         elif isinstance(tree, VarDeclarationNode):
-            value = UNDEFINED
-            if tree.expression_node is not None:
-                value = self._visit(tree.expression_node)
+            # value = UNDEFINED
+            # if tree.expression_node is not None:
+            #     value = self._visit(tree.expression_node)
+            # if tree.kw_spec_token.text == "let":
+            #     self.current_context.declare_variable(tree.var_token.text, value)
+            # else:
+            #     self.global_context.declare_variable(tree.var_token.text, value)
             if tree.kw_spec_token.text == "let":
-                self.current_context.declare_variable(tree.var_token.text, value)
+                declfunc = self.current_context.declare_variable
             else:
-                self.global_context.declare_variable(tree.var_token.text, value)
+                declfunc = self.global_context.declare_variable
+            for i in range(len(tree.var_tokens)):
+                value = UNDEFINED
+                if tree.expression_nodes[i] is not None:
+                    value = self._visit(tree.expression_nodes[i])
+                declfunc(tree.var_tokens[i].text, value)
+            result = UNDEFINED # this type of expression cannot evaluate to anything
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
@@ -166,6 +176,7 @@ TT_RPAREN           = "RPAREN"      # )
 TT_LBRACE           = "LBRACE"      # {
 TT_RBRACE           = "RBRACE"      # }
 TT_SEMICOLON        = "SEMICOLON"   # ;
+TT_COMMA            = "COMMA"       # ,
 
 ###############################################################################
 # KEYWORDS
@@ -377,6 +388,8 @@ class Lexer:
             token = Token(TT_RBRACE, self.position)
         elif self._current_char() == ';':
             token = Token(TT_SEMICOLON, self.position)
+        elif self._current_char() == ',':
+            token = Token(TT_COMMA, self.position)
         # EOF
         elif self._current_char() == '\0':
             token = Token(TT_EOF, self.position)
@@ -455,24 +468,30 @@ class Parser:
         if self._current_token.is_keyword(KW_VAR) or self._current_token.is_keyword(KW_LET):
             var_spec_token = self._current_token
             self._advance()
-            if self._current_token.type == TT_IDENTIFIER:
-                id_token = self._current_token
+            id_tokens = []
+            assign_expressions = []
+            if self._current_token.type != TT_IDENTIFIER:
+                raise ParseError(self.lexer.position, self._current_token, "Expected identifier")
+
+            while self._current_token.type == TT_IDENTIFIER:
+                id_tokens.append(self._current_token)
                 self._advance()
                 # there is an assignment
                 if self._current_token.type == TT_ASSIGN:
                     self._advance()
-                    assign_expr = self._expr()
-                    statement_node = VarDeclarationNode(var_spec_token, id_token, assign_expr)
-                # empty declaration
+                    assign_expressions.append(self._expr())
                 else:
-                    statement_node = VarDeclarationNode(var_spec_token, id_token, None)
-                # ensure semicolon
-                if self._current_token.type != TT_SEMICOLON:
-                    raise ParseError(self.lexer.position, self._current_token, "Missing semicolon")
-                else:
+                    assign_expressions.append(None)
+                if self._current_token.type == TT_COMMA:
                     self._advance()
-            else:
-                raise ParseError(self.lexer.position, self._current_token, "Expected identifier")
+
+            statement_node = VarDeclarationNode(var_spec_token, id_tokens, assign_expressions)
+
+            # ensure semicolon
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Missing semicolon")
+
+            self._advance()
         # is it a {} block
         elif self._current_token.type == TT_LBRACE:
             self._advance()
@@ -638,12 +657,21 @@ class BlockNode:
         return rep
 
 class VarDeclarationNode:
-    def __init__(self, kw_spec_token, var_token, expression_node=None):
+    def __init__(self, kw_spec_token, var_tokens, expression_nodes):
         self.kw_spec_token = kw_spec_token
-        self.var_token = var_token
-        self.expression_node = expression_node
+        self.var_tokens = var_tokens
+        self.expression_nodes = expression_nodes
+        # if this is used properly the assert should never fail
+        assert (len(self.var_tokens) == len(self.expression_nodes))
     def __repr__(self):
-        return f"({self.kw_spec_token} {self.var_token} = {self.expression_node})"
+        rep = self.kw_spec_token.text + " "
+        for i in range(len(self.var_tokens)):
+            rep += self.var_tokens[i].text
+            if self.expression_nodes[i] is not None:
+                rep += "=" + str(self.expression_nodes[i])
+            if i < len(self.var_tokens) - 1:
+                rep += ", "
+        return rep
 
 ###############################################################################
 # TYPESAFE OPERATIONS
