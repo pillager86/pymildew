@@ -102,14 +102,8 @@ class Interpreter:
             for each_node in tree.statement_nodes:
                 result = self._visit(each_node)
             self.current_context = self.current_context.parent
+            return result
         elif isinstance(tree, VarDeclarationNode):
-            # value = UNDEFINED
-            # if tree.expression_node is not None:
-            #     value = self._visit(tree.expression_node)
-            # if tree.kw_spec_token.text == "let":
-            #     self.current_context.declare_variable(tree.var_token.text, value)
-            # else:
-            #     self.global_context.declare_variable(tree.var_token.text, value)
             if tree.kw_spec_token.text == "let":
                 declfunc = self.current_context.declare_variable
             else:
@@ -118,8 +112,11 @@ class Interpreter:
                 value = UNDEFINED
                 if tree.expression_nodes[i] is not None:
                     value = self._visit(tree.expression_nodes[i])
-                declfunc(tree.var_tokens[i].text, value)
+                success = declfunc(tree.var_tokens[i].text, value)
+                if not success:
+                    raise ScriptRuntimeError(tree, "Cannot redeclare variable " + tree.var_tokens[i].text)
             result = UNDEFINED # this type of expression cannot evaluate to anything
+            return result
         elif tree is None:
             return UNDEFINED # nothing to do
         else:
@@ -565,6 +562,8 @@ class Parser:
         return left
 
     def _primary_expr(self):
+        # TODO check for prefix and postfix increment/decrement operators on identifiers
+        #       will also have to account for member access (.) situations
         left = None
         if self._current_token.type == TT_LPAREN:
             self._advance()
@@ -648,7 +647,7 @@ class ExpressionStatementNode:
     def __init__(self, node):
         self.node = node
     def __repr__(self):
-        return f"(Statement: {self.node})"
+        return f"Expression statement: {self.node}"
 
 class BlockNode:
     def __init__(self, statement_nodes):
@@ -682,6 +681,7 @@ class VarDeclarationNode:
 ###############################################################################
 
 # TODO refactor to avoid code duplication
+# TODO refactor to check for bool or int and return undefined for the rest (future types considered)
 
 def typesafe_logical_and(left, right):
     if left is UNDEFINED or right is UNDEFINED:
@@ -809,6 +809,8 @@ def typesafe_ge(left, right):
 
 # singleton for default values of uninitialized variables. propagates through typesafe_ operations
 class Undefined:
+    def __bool__(self):
+        return False
     def __repr__(self):
         return "undefined"
 
