@@ -1,37 +1,48 @@
-from sys import stderr
+import sys
 
 from mildew import Interpreter, LexerError, ParseError, ScriptRuntimeError
 
-# TODO import readline and use that instead of input
-def main():
-    interpreter = Interpreter()
-    while True:
-        try:
-            line = input("mildew> ").strip()
-            if line.strip() == "":
-                break
-            while len(line) > 0 and line[-1] == '\\':
-                line = line[0:-1] + "\n"
-                line += input(">>> ")
-        except EOFError:
-            print("\nEnd of input found. Terminating.")
-            break
+def eval_with_error_checking(interpreter, text):
+    result = None
+    try:
+        result = interpreter.evaluate(text)
+    except LexerError as lex_error:
+        print("\nLexerError: " + str(lex_error), file=sys.stderr)
+        print("at " + str(lex_error.position), file=sys.stderr)
+    except ParseError as parse_error:
+        print("ParseError: " + str(parse_error), file=sys.stderr)
+        print("at " + str(parse_error.position), file=sys.stderr)
+        print("Token: " + str(parse_error.token), file=sys.stderr)
+    except ScriptRuntimeError as sr_error:
+        print("ScriptRuntimeError: " + str(sr_error), file=sys.stderr)
+        print("Node: " + str(sr_error.node), file=sys.stderr)
+        if sr_error.token is not None:
+            print("Token: " + str(sr_error.token) + " at " + str(sr_error.token.position), file=sys.stderr)
+    return result
 
-        try:
-            interpreter.evaluate(line)
-        except LexerError as lex_error:
-            print("\nLexerError: " + str(lex_error), file=stderr)
-            print("at " + str(lex_error.position), file=stderr)
-        except ParseError as parse_error:
-            print("ParseError: " + str(parse_error), file=stderr)
-            print("at " + str(parse_error.position), file=stderr)
-            print("Token: " + str(parse_error.token), file=stderr)
-        except ScriptRuntimeError as sr_error:
-            print("ScriptRuntimeError: " + str(sr_error), file=stderr)
-            print("Node: " + str(sr_error.node), file=stderr)
-            if sr_error.token is not None:
-                print("Token: " + str(sr_error.token) + " at " + str(sr_error.token.position), file=stderr)
+# TODO we need something better than input() that allows arrow keys to be used
+def main(args):
+    interpreter = Interpreter()
+    if len(args) > 1:
+        file_to_read = args[1]
+        input_file = open(file_to_read, "r")
+        code = input_file.read()
+        eval_with_error_checking(interpreter, code)
+    else:
+        while True:
+            try:
+                line = input("mildew> ").strip()
+                if line.strip() == "":
+                    break
+                while len(line) > 0 and line[-1] == '\\':
+                    line = line[0:-1] + "\n"
+                    line += input(">>> ")
+            except EOFError:
+                print("\nEnd of input found. Terminating.")
+                break
+            eval_with_error_checking(interpreter, line)
+
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)
 

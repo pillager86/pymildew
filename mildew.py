@@ -8,6 +8,8 @@ class Interpreter:
         '''Constructs a new Interpreter'''
         self.global_context = ScriptContext(None)
         self.current_context = self.global_context
+        self.return_value = UNDEFINED
+        self.return_value_is_set = False
 
     def evaluate(self, text):
         '''Evaluates a set of statements'''
@@ -24,6 +26,7 @@ class Interpreter:
         for statement_node in statement_list:
             print(statement_node)
             self._visit(statement_node)
+            # TODO check for return value and return that immediately after unsetting it
         # pop local context
         self.current_context = self.current_context.parent
         return statement_list
@@ -104,6 +107,7 @@ class Interpreter:
             self.current_context = ScriptContext(self.current_context)
             for each_node in tree.statement_nodes:
                 result, _ = self._visit(each_node)
+                # TODO check for return value set and stop executing rest by breaking
             self.current_context = self.current_context.parent
             return result, None
         elif isinstance(tree, VarDeclarationNode):
@@ -120,6 +124,36 @@ class Interpreter:
                     raise ScriptRuntimeError(tree, "Cannot redeclare variable " + tree.var_tokens[i].text, tree.var_tokens[i])
             result = UNDEFINED # this type of expression cannot evaluate to anything
             return result, None
+        elif isinstance(tree, IfStatementNode):
+            condition, _ = self._visit(tree.condition_node)
+            if condition:
+                self._visit(tree.if_statement)
+            else:
+                if tree.else_statement is not None:
+                    self._visit(tree.else_statement)
+            return UNDEFINED, None # no meaningful return value
+        elif isinstance(tree, WhileStatementNode):
+            condition, _ = self._visit(tree.condition_node)
+            while condition:
+                self._visit(tree.loop_statement)
+                condition, _ = self._visit(tree.condition_node)
+            return UNDEFINED, None
+        elif isinstance(tree, ForStatementNode):
+            self.current_context = ScriptContext(self.current_context)
+            self._visit(tree.init_statement)
+            if(tree.condition_node is None):
+                condition = True
+            else:
+                condition, _ = self._visit(tree.condition_node)
+            while condition:
+                self._visit(tree.loop_statement)
+                self._visit(tree.increment_node)
+                if(tree.condition_node is None):
+                    condition = True
+                else:
+                    condition, _ = self._visit(tree.condition_node)
+            self.current_context = self.current_context.parent
+            return UNDEFINED, None
         elif tree is None:
             return UNDEFINED, None # nothing to do (empty statement)
         else:
@@ -188,7 +222,11 @@ KW_FALSE = "false"
 KW_UNDEFINED = "undefined"
 KW_VAR = "var"
 KW_LET = "let"
-KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET ]
+KW_IF = "if"
+KW_ELSE = "else"
+KW_WHILE = "while"
+KW_FOR = "for"
+KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, KW_WHILE, KW_FOR ]
 
 ###############################################################################
 # LEXER CLASSES
@@ -505,6 +543,59 @@ class Parser:
                 raise ParseError(self.lexer.position, self._current_token, "Expected '}'")
             self._advance()                
             statement_node = BlockNode(stmts)
+        # is it an if-statement?
+        elif self._current_token.is_keyword(KW_IF):
+            self._advance()
+            if self._current_token.type != TT_LPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '(' after if keyword")
+            self._advance()
+            condition_node = self._expr()
+            if self._current_token.type != TT_RPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ')' after if condition")
+            self._advance()
+            if_node = self._statement()
+            else_node = None
+            if self._current_token.is_keyword(KW_ELSE):
+                self._advance()
+                else_node = self._statement()
+            statement_node = IfStatementNode(condition_node, if_node, else_node)
+        # is it a while statement?
+        elif self._current_token.is_keyword(KW_WHILE):
+            self._advance()
+            if self._current_token.type != TT_LPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '(' after while keyword")
+            self._advance()
+            condition_node = self._expr()
+            if self._current_token.type != TT_RPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ')' after while condition")
+            self._advance()
+            loop_statement = self._statement()
+            statement_node = WhileStatementNode(condition_node, loop_statement)
+        # is it a for statement?
+        elif self._current_token.is_keyword(KW_FOR):
+            self._advance()
+            if self._current_token.type != TT_LPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '(' after for keyword")
+            self._advance()
+            init_statement = self._statement()
+            if self._current_token.type == TT_SEMICOLON:
+                condition_node = None
+                self._advance()
+            else:
+                condition_node = self._expr()
+                if self._current_token.type != TT_SEMICOLON:
+                    raise ParseError(self.lexer.position, self._current_token, "Expected ';' after condition expression in for loop")
+                else:
+                    self._advance()
+            if self._current_token.type == TT_RPAREN:
+                increment_node = None
+            else:
+                increment_node = self._expr()
+            if self._current_token.type != TT_RPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ')' after for loop conditions")
+            self._advance()
+            loop_statement = self._statement()
+            statement_node = ForStatementNode(init_statement, condition_node, increment_node, loop_statement)
         # could be an empty statement
         elif self._current_token.type == TT_SEMICOLON:
             self._advance()
@@ -656,6 +747,40 @@ class VarDeclarationNode:
             if i < len(self.var_tokens) - 1:
                 rep += ", "
         return rep
+
+class IfStatementNode:
+    def __init__(self, condition_node, if_statement, else_statement=None):
+        self.condition_node = condition_node
+        self.if_statement = if_statement
+        self.else_statement = else_statement
+    def __repr__(self):
+        rep = "if(" + str(self.condition_node) + ") " + str(self.if_statement)
+        if self.else_statement is not None:
+            rep += " else " + str(self.else_statement)
+        return rep
+
+class WhileStatementNode:
+    def __init__(self, condition_node, loop_statement):
+        self.condition_node = condition_node
+        self.loop_statement = loop_statement
+    def __repr__(self):
+        return f"while({self.condition_node}) {self.loop_statement}"
+
+class ForStatementNode:
+    def __init__(self, init_statement, condition_node, increment_node, loop_statement):
+        self.init_statement = init_statement
+        self.condition_node = condition_node
+        self.increment_node = increment_node
+        self.loop_statement = loop_statement
+    def __repr__(self):
+        return f"for({self.init_statement};{self.condition_node};{self.increment_node}) {self.loop_statement}"
+
+class ReturnStatementNode:
+    def __init__(self, kw_return_token, node):
+        self.kw_return_token = kw_return_token
+        self.node = node
+    def __repr__(self):
+        return f"return {self.node}"
 
 ###############################################################################
 # TYPESAFE OPERATIONS
