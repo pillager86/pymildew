@@ -2,6 +2,7 @@ from sys import stderr
 
 from mildew import Interpreter, LexerError, ParseError, ScriptRuntimeError
 
+# TODO import readline and use that instead of input
 def main():
     interpreter = Interpreter()
     while True:
@@ -16,7 +17,6 @@ def main():
             print("\nEnd of input found. Terminating.")
             break
 
-        #interpreter.evaluate(line)
         try:
             interpreter.evaluate(line)
         except LexerError as lex_error:
@@ -29,6 +29,8 @@ def main():
         except ScriptRuntimeError as sr_error:
             print("ScriptRuntimeError: " + str(sr_error), file=stderr)
             print("Node: " + str(sr_error.node), file=stderr)
+            if sr_error.token is not None:
+                print("Token: " + str(sr_error.token) + " at " + str(sr_error.token.position), file=stderr)
 
 if __name__ == "__main__":
     main()

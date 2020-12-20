@@ -3,7 +3,7 @@
 ###############################################################################
 
 class Interpreter:
-    '''Holds a context for variables and evaluates expressions'''
+    '''Holds a context for variables and evaluates scripts'''
     def __init__(self):
         '''Constructs a new Interpreter'''
         self.global_context = ScriptContext(None)
@@ -28,22 +28,24 @@ class Interpreter:
         self.current_context = self.current_context.parent
         return statement_list
 
-    def _visit(self, tree):
+    def _visit(self, tree): # returns any value and possible VarReference
         if isinstance(tree, LiteralNode):
-            return tree.value
+            return tree.value, None
         elif isinstance(tree, UnaryOpNode):
-            # TODO: refactor, collect node value up front and check to make sure unary op makes sense for type
+            value, _ = self._visit(tree.node)
+            # TODO var_ref will have to be handled and returned for postfix and prefix operations
             if tree.op_token.type == TT_NOT:
-                return typesafe_logical_not(self._visit(tree.node))
+                return typesafe_logical_not(value), None
             elif tree.op_token.type == TT_DASH:
-                return typesafe_unary_minus(self._visit(tree.node))
+                return typesafe_unary_minus(value), None
             elif tree.op_token.type == TT_PLUS:
-                return typesafe_unary_plus(self._visit(tree.node))
+                return typesafe_unary_plus(value), None
             else:
-                raise ScriptRuntimeError(tree, "Unknown unary operator")
+                raise ScriptRuntimeError(tree, "Unknown unary operator", tree.op_token)
         elif isinstance(tree, BinaryOpNode):
-            left_value = self._visit(tree.left_node)
-            right_value = self._visit(tree.right_node)
+            left_value, left_ref = self._visit(tree.left_node)
+            # if = is parsed as a regular binary operation we will need left_var
+            right_value, __ = self._visit(tree.right_node)
             result = UNDEFINED
 
             if tree.op_token.type == TT_OR:
@@ -76,33 +78,34 @@ class Interpreter:
                 result = typesafe_mod(left_value, right_value)
             elif tree.op_token.type == TT_POW:
                 result = typesafe_pow(left_value, right_value)
+            elif tree.op_token.type == TT_ASSIGN:
+                if left_ref is None:
+                    raise ScriptRuntimeError(tree, "Cannot assign to lvalue", tree.op_token)
+                print("Assigning to a reference")
+                left_ref.value = right_value
+                result = right_value
             else:
-                raise ScriptRuntimeError(tree, "Unsupported binary operation")
+                raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
 
             if result is INFINITY:
-                raise ScriptRuntimeError(tree, "Division by zero error")
+                raise ScriptRuntimeError(tree, "Division by zero error", tree.op_token)
 
-            return result
+            return result, None
         elif isinstance(tree, VarAccessNode):
             result = self.current_context.access_variable(tree.id_token.text)
             if not self.current_context.var_exists(tree.id_token.text):
-                raise ScriptRuntimeError(tree, "Undefined variable")
-            return result
-        elif isinstance(tree, VarAssignmentNode):
-            # TODO handle decrement and increment -= += assignments as well
-            if not self.current_context.var_exists(tree.var_token.text):
-                raise ScriptRuntimeError(tree, "Cannot assign to undeclared variable")
-            else:
-                return self.current_context.reassign_variable(tree.var_token.text, self._visit(tree.right_node))
+                raise ScriptRuntimeError(tree, "Undefined variable", tree.id_token)
+            return result.value, result
         elif isinstance(tree, ExpressionStatementNode):
-            result = self._visit(tree.node)
+            result, _ = self._visit(tree.node)
             print("Expression statement result: " + str(result)) # temporary
+            return result, None
         elif isinstance(tree, BlockNode):
             self.current_context = ScriptContext(self.current_context)
             for each_node in tree.statement_nodes:
-                result = self._visit(each_node)
+                result, _ = self._visit(each_node)
             self.current_context = self.current_context.parent
-            return result
+            return result, None
         elif isinstance(tree, VarDeclarationNode):
             if tree.kw_spec_token.text == "let":
                 declfunc = self.current_context.declare_variable
@@ -111,18 +114,18 @@ class Interpreter:
             for i in range(len(tree.var_tokens)):
                 value = UNDEFINED
                 if tree.expression_nodes[i] is not None:
-                    value = self._visit(tree.expression_nodes[i])
+                    value, _ = self._visit(tree.expression_nodes[i])
                 success = declfunc(tree.var_tokens[i].text, value)
                 if not success:
-                    raise ScriptRuntimeError(tree, "Cannot redeclare variable " + tree.var_tokens[i].text)
+                    raise ScriptRuntimeError(tree, "Cannot redeclare variable " + tree.var_tokens[i].text, tree.var_tokens[i])
             result = UNDEFINED # this type of expression cannot evaluate to anything
-            return result
+            return result, None
         elif tree is None:
-            return UNDEFINED # nothing to do
+            return UNDEFINED, None # nothing to do (empty statement)
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
-        return None
+        return None, None
 
 ###############################################################################
 # ERRORS
@@ -140,9 +143,10 @@ class ParseError(Exception):
         self.token = token
 
 class ScriptRuntimeError(Exception):
-    def __init__(self, node, msg):
+    def __init__(self, node, msg, token=None):
         super().__init__(msg)
         self.node = node
+        self.token = token
 
 ###############################################################################
 # TOKEN TYPE ENUM
@@ -481,6 +485,8 @@ class Parser:
                     assign_expressions.append(None)
                 if self._current_token.type == TT_COMMA:
                     self._advance()
+                    if self._current_token.type != TT_IDENTIFIER:
+                        raise ParseError(self.lexer.position, self._current_token, "Trailing commas are not allowed in variable declarations")
 
             statement_node = VarDeclarationNode(var_spec_token, id_tokens, assign_expressions)
 
@@ -515,19 +521,6 @@ class Parser:
     def _expr(self, parent_precedence = 0):
         left = None
 
-        # check for assignment by peeking next token
-        # TODO make this a separate grammar rule once statements are introduced
-        peek = self.lexer.next_token(False)
-        if self._current_token.type == TT_IDENTIFIER and peek.type == TT_ASSIGN:
-            var_token = self._current_token
-            self._advance()
-            assign_token = self._current_token
-            self._advance()
-            # right = self._expr(parent_precedence)
-            right = self._expr(binary_op_priority(assign_token))
-            left = VarAssignmentNode(assign_token, var_token, right)
-            return left
-
         un_op_prec = unary_op_priority(self._current_token)
         if un_op_prec != 0 and un_op_prec >= parent_precedence:
             token = self._current_token
@@ -536,13 +529,9 @@ class Parser:
             left = UnaryOpNode(token, operand)
         else:
             left = self._primary_expr()
-        
-        # cheap hack to make sure no attempt to assign to an lvalue
-        if self._current_token.type == TT_ASSIGN:
-            raise ParseError(self._current_token.position, self._current_token, "Cannot assign to an lvalue")
 
-        # cheap hack to enforce right-assoc on POW. TODO implement this with data
-        if self._current_token.type == TT_POW:
+        # cheap hack to enforce right-assoc on POW and ASSIGN. TODO implement this with data
+        if self._current_token.type == TT_POW or self._current_token.type == TT_ASSIGN:
             prec = binary_op_priority(self._current_token)
             token = self._current_token
             self._advance()
@@ -634,14 +623,6 @@ class VarAccessNode:
         self.id_token = id_token
     def __repr__(self):
         return f"var '{self.id_token.text}'"
-
-class VarAssignmentNode:
-    def __init__(self, op_token, var_token, right_node):
-        self.op_token = op_token
-        self.var_token = var_token
-        self.right_node = right_node
-    def __repr__(self):
-        return f"({self.var_token} {self.op_token} {self.right_node})"
 
 class ExpressionStatementNode:
     def __init__(self, node):
@@ -833,6 +814,10 @@ INFINITY = Infinity()
 # RUNTIME CONTEXT
 ###############################################################################
 
+class VarReference:
+    def __init__(self, value):
+        self.value = value
+
 class ScriptContext:
     def __init__(self, parent=None):
         self.parent = parent
@@ -843,7 +828,7 @@ class ScriptContext:
         while context is not None and not name in context.variables:
             context = context.parent
         if context is None:
-            return UNDEFINED
+            return None
         else:
             return context.variables[name]
 
@@ -853,17 +838,18 @@ class ScriptContext:
         while context is not None and not name in context.variables:
             context = context.parent
         if context is None:
-            return UNDEFINED
+            return None
         else:
             if value is UNDEFINED:
                 del context.variables[name]
+                return None
             else:
-                context.variables[name] = value
-            return value
+                context.variables[name].value = value
+                return context.variables[name]
 
     def declare_variable(self, name, value=UNDEFINED):
         if not name in self.variables:
-            self.variables[name] = value
+            self.variables[name] = VarReference(value)
             return True
         else:
             return False
