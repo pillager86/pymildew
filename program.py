@@ -16,9 +16,9 @@ def main():
             print("\nEnd of input found. Terminating.")
             break
 
+        #interpreter.evaluate(line)
         try:
-            result = interpreter.evaluate(line)
-            print("The result is " + str(result))
+            interpreter.evaluate(line)
         except LexerError as lex_error:
             print("\nLexerError: " + str(lex_error), file=stderr)
             print("at " + str(lex_error.position), file=stderr)

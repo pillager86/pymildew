@@ -20,14 +20,17 @@
 
 # GRAMMAR
 
-program         ::=     statements
+program         ::=     statement*
 
-statements      ::=     statement*
+statement       ::=     var-decl SEMICOLON
+                        | expr SEMICOLON
+                        | block
 
-statement       ::=     expr (SEMICOLON|EOF) | LBRACE statements RBRACE
+block           ::=     LBRACE statement* RBRACE
 
-expr            ::=     NOT expr |
-                        (PLUS|DASH) expr |
+var-decl        ::=     (KEYWORD:var|KEYWORD:let) IDENTIFIER (EQ expr)?
+
+expr            ::=     (NOT|PLUS|DASH) expr |
                         primary-expr |
                         expr EXP expr |
                         expr (STAR|FSLASH|PERCENT) expr |

@@ -7,10 +7,12 @@ class Interpreter:
     def __init__(self):
         '''Constructs a new Interpreter with a global context to store all variables for now'''
         self.global_context = ScriptContext(None)
-        self.current_context = None # for now
+        self.current_context = self.global_context
 
     def evaluate(self, text):
         '''Evaluates a single expression (for now)'''
+        # create a context just for this evaluate
+        self.current_context = ScriptContext(self.current_context)
         lexer = Lexer(text)
         token = lexer.next_token()
         while(token.type != TT_EOF):
@@ -18,9 +20,13 @@ class Interpreter:
             token = lexer.next_token()
         print()
         parser = Parser(text)
-        tree = parser.parse()
-        print(tree)
-        return self._visit(tree)
+        statement_list = parser.parse()
+        for statement_node in statement_list:
+            print(statement_node)
+            self._visit(statement_node)
+        # pop local context
+        self.current_context = self.current_context.parent
+        return statement_list
 
     def _visit(self, tree):
         if isinstance(tree, LiteralNode):
@@ -78,15 +84,34 @@ class Interpreter:
 
             return result
         elif isinstance(tree, VarAccessNode):
-            result = self.global_context.get_variable(tree.id_token.text)
+            result = self.current_context.access_variable(tree.id_token.text)
             if result is UNDEFINED:
                 raise ScriptRuntimeError(tree, "Undefined variable")
             return result
         elif isinstance(tree, VarAssignmentNode):
             # TODO handle decrement and increment -= += assignments as well
-            return self.global_context.set_variable(tree.var_token.text, self._visit(tree.right_node))
+            if not self.current_context.var_exists(tree.var_token.text):
+                raise ScriptRuntimeError(tree, "Cannot assign to undeclared variable")
+            else:
+                return self.current_context.reassign_variable(tree.var_token.text, self._visit(tree.right_node))
+        elif isinstance(tree, ExpressionStatementNode):
+            result = self._visit(tree.node)
+            print("Statement result: " + str(result)) # temporary
+        elif isinstance(tree, BlockNode):
+            self.current_context = ScriptContext(self.current_context)
+            for each_node in tree.statement_nodes:
+                result = self._visit(each_node)
+            self.current_context = self.current_context.parent
+        elif isinstance(tree, VarDeclarationNode):
+            value = UNDEFINED
+            if tree.expression_node is not None:
+                value = self._visit(tree.expression_node)
+            if tree.kw_spec_token.text == "let":
+                self.current_context.declare_variable(tree.var_token.text, value)
+            else:
+                self.global_context.declare_variable(tree.var_token.text, value)
         else:
-            raise ScriptRuntimeError(tree, "Cannot visit unknown node type")
+            raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
         return None
 
@@ -148,7 +173,9 @@ TT_SEMICOLON        = "SEMICOLON"   # ;
 KW_TRUE = "true"
 KW_FALSE = "false"
 KW_UNDEFINED = "undefined"
-KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED ]
+KW_VAR = "var"
+KW_LET = "let"
+KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET ]
 
 ###############################################################################
 # LEXER CLASSES
@@ -192,6 +219,13 @@ class Token:
             result += ":" + self.text 
         result += "]"
         return result
+    def is_keyword(self, kw_name):
+        if self.type != TT_KEYWORD:
+            return False
+        if self.text == kw_name:
+            return True
+        else:
+            return False
 
 def starts_keyword_or_id(char):
     return char.isalpha() or char == '_' or char == '$'
@@ -402,15 +436,61 @@ class Parser:
         self.lexer = Lexer(text)
         self._advance()
 
-    # build a tree and return it
+    # build a tree and return it (also the "program" grammar rule)
     def parse(self):
-        # TODO parse semicolon separated statements instead of one expression
-        left = self._expr()
-        if self._current_token.type != TT_EOF: # no trailing garbage allowed
-            raise ParseError(self._current_token.position, self._current_token, "Unexpected token after expression")
-        return left
+        # left = self._expr()
+        # if self._current_token.type != TT_EOF: # no trailing garbage allowed
+        #    raise ParseError(self._current_token.position, self._current_token, "Unexpected token after expression")
+        # return left
+        stmts = []
+        while self._current_token.type != TT_EOF:
+            stmts.append(self._statement())
+        return stmts
 
     # grammar rules
+
+    def _statement(self):
+        statement_node = None
+        # is it a var declaration
+        if self._current_token.is_keyword(KW_VAR) or self._current_token.is_keyword(KW_LET):
+            var_spec_token = self._current_token
+            self._advance()
+            if self._current_token.type == TT_IDENTIFIER:
+                id_token = self._current_token
+                self._advance()
+                # there is an assignment
+                if self._current_token.type == TT_ASSIGN:
+                    self._advance()
+                    assign_expr = self._expr()
+                    statement_node = VarDeclarationNode(var_spec_token, id_token, assign_expr)
+                # empty declaration
+                else:
+                    statement_node = VarDeclarationNode(var_spec_token, id_token, None)
+                # ensure semicolon
+                if self._current_token.type != TT_SEMICOLON:
+                    raise ParseError(self.lexer.position, self._current_token, "Missing semicolon")
+                else:
+                    self._advance()
+            else:
+                raise ParseError(self.lexer.position, self._current_token, "Expected identifier")
+        # is it a {} block
+        elif self._current_token.type == TT_LBRACE:
+            self._advance()
+            stmts = []
+            while self._current_token.type != TT_RBRACE and self._current_token.type != TT_EOF:
+                stmts.append(self._statement())
+            if self._current_token.type != TT_RBRACE:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '}'")
+            self._advance()                
+            statement_node = BlockNode(stmts)
+        # else it has to be an expression followed by a semicolon
+        else:
+            statement_node = ExpressionStatementNode(self._expr())
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Missing ';'")
+            self._advance()
+
+        return statement_node
 
     def _expr(self, parent_precedence = 0):
         left = None
@@ -492,7 +572,7 @@ class Parser:
         elif self._current_token.type == TT_IDENTIFIER:
             left = VarAccessNode(self._current_token)
             self._advance()
-        else:
+        elif self._current_token.type != TT_RBRACE:
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
         return left
 
@@ -540,6 +620,30 @@ class VarAssignmentNode:
         self.right_node = right_node
     def __repr__(self):
         return f"({self.var_token} {self.op_token} {self.right_node})"
+
+class ExpressionStatementNode:
+    def __init__(self, node):
+        self.node = node
+    def __repr__(self):
+        return f"(Statement: {self.node})"
+
+class BlockNode:
+    def __init__(self, statement_nodes):
+        self.statement_nodes = statement_nodes
+    def __repr__(self):
+        rep = "{"
+        for st_node in self.statement_nodes:
+            rep += str(st_node) + "\n"
+        rep += "}"
+        return rep
+
+class VarDeclarationNode:
+    def __init__(self, kw_spec_token, var_token, expression_node=None):
+        self.kw_spec_token = kw_spec_token
+        self.var_token = var_token
+        self.expression_node = expression_node
+    def __repr__(self):
+        return f"({self.kw_spec_token} {self.var_token} = {self.expression_node})"
 
 ###############################################################################
 # TYPESAFE OPERATIONS
@@ -692,23 +796,41 @@ class ScriptContext:
         self.parent = parent
         self.variables = {}
 
-    def get_variable(self, name):
-        # for now just look in current context
-        if name in self.variables:
-            return self.variables[name]
-        else:
+    def access_variable(self, name):
+        context = self
+        while context is not None and not name in context.variables:
+            context = context.parent
+        if context is None:
             return UNDEFINED
+        else:
+            return context.variables[name]
 
-    def set_variable(self, name, value):
-        # for now just set in current context
-        if value is UNDEFINED:
-            if name in self.variables:
-                del self.variables[name]
+    def reassign_variable(self, name, value):
+        # to be used in reassignment not declaration
+        context = self
+        while context is not None and not name in context.variables:
+            context = context.parent
+        if context is None:
             return UNDEFINED
         else:
+            if value is UNDEFINED:
+                del context.variables[name]
+            else:
+                context.variables[name] = value
+            return value
+
+    def declare_variable(self, name, value=UNDEFINED):
+        if not name in self.variables:
             self.variables[name] = value
-            return self.variables[name]
+            return True
+        else:
+            return False
 
     def var_exists(self, name):
-        # for now only check current context
-        return name in self.variables
+        context = self
+        while context is not None and not name in context.variables:
+            context = context.parent
+        if context is None:
+            return False
+        else:
+            return True
