@@ -2,7 +2,7 @@ import sys
 
 from mildew import Interpreter, LexerError, ParseError, ScriptRuntimeError
 
-def eval_with_error_checking(interpreter, text, file_name = "<stdin>"):
+def eval_with_error_checking(interpreter : Interpreter, text : str, file_name : str = "<stdin>") -> any:
     result = None
     try:
         result = interpreter.evaluate(text)

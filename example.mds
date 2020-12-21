@@ -15,3 +15,4 @@ for(;;) {
     "This doesn't get evaluated";
 }
 
+return 69;

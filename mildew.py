@@ -83,6 +83,7 @@ class Interpreter:
                 declfunc = self.global_context.declare_variable
             for i in range(len(tree.var_tokens)):
                 value = UNDEFINED
+                visit_result = VisitResult(UNDEFINED)
                 if tree.expression_nodes[i] is not None:
                     visit_result = self._visit(tree.expression_nodes[i])
                 success = declfunc(tree.var_tokens[i].text, visit_result.value)
@@ -206,17 +207,17 @@ TT_COMMA            = "COMMA"       # ,
 ###############################################################################
 # KEYWORDS
 ###############################################################################
-KW_TRUE = "true"
-KW_FALSE = "false"
-KW_UNDEFINED = "undefined"
-KW_VAR = "var"
-KW_LET = "let"
-KW_IF = "if"
-KW_ELSE = "else"
-KW_WHILE = "while"
-KW_FOR = "for"
-KW_BREAK = "break"
-KW_RETURN = "return"
+KW_TRUE             = "true"
+KW_FALSE            = "false"
+KW_UNDEFINED        = "undefined"
+KW_VAR              = "var"
+KW_LET              = "let"
+KW_IF               = "if"
+KW_ELSE             = "else"
+KW_WHILE            = "while"
+KW_FOR              = "for"
+KW_BREAK            = "break"
+KW_RETURN           = "return"
 KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, 
             KW_WHILE, KW_FOR, KW_BREAK, KW_RETURN]
 
@@ -481,12 +482,8 @@ class Parser:
         self.lexer = Lexer(text)
         self._advance()
 
-    # build a tree and return it (also the "program" grammar rule)
+    # build a statement list and return it (also the "program" grammar rule)
     def parse(self):
-        # left = self._expr()
-        # if self._current_token.type != TT_EOF: # no trailing garbage allowed
-        #    raise ParseError(self._current_token.position, self._current_token, "Unexpected token after expression")
-        # return left
         stmts = []
         while self._current_token.type != TT_EOF:
             stmts.append(self._statement())
@@ -932,6 +929,7 @@ class VarReference:
         self.value = value
 
 class ScriptContext:
+    # TODO a const table that will be checked on each var declare or assign attempt
     def __init__(self, parent=None):
         self.parent = parent
         self.variables = {}
