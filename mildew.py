@@ -15,8 +15,6 @@ class Interpreter:
 
     def evaluate(self, text):
         '''Evaluates a set of statements'''
-        # create a context just for this evaluate
-        self.current_context = ScriptContext(self.current_context)
         lexer = Lexer(text)
         token = lexer.next_token()
         while(token.type != TT_EOF):
@@ -25,77 +23,36 @@ class Interpreter:
         print()
         parser = Parser(text)
         statement_list = parser.parse()
-        for statement_node in statement_list:
-            print(statement_node)
-            self._visit(statement_node)
-            # TODO check for return value and return that immediately after unsetting it
-        # pop local context
-        self.current_context = self.current_context.parent
-        return statement_list
+        program_block = BlockNode(statement_list)
+        visit_result = self._visit(program_block)
+        return visit_result.value
 
-    def _visit(self, tree): # returns any value and possible VarReference
+    def _visit(self, tree):
         if isinstance(tree, LiteralNode):
             return VisitResult(tree.value)
         elif isinstance(tree, UnaryOpNode):
             visit_result = self._visit(tree.node)
             value = visit_result.value
-            # TODO var_ref will have to be handled and returned for postfix and prefix operations
-            if tree.op_token.type == TT_NOT:
-                return VisitResult(typesafe_logical_not(value))
-            elif tree.op_token.type == TT_DASH:
-                return VisitResult(typesafe_unary_minus(value))
-            elif tree.op_token.type == TT_PLUS:
-                return VisitResult(typesafe_unary_plus(value))
-            else:
-                raise ScriptRuntimeError(tree, "Unknown unary operator", tree.op_token)
+            return VisitResult(typesafe_unary_op(tree.op_token, value))
         elif isinstance(tree, BinaryOpNode):
             left_visit_result = self._visit(tree.left_node)
-            # if = is parsed as a regular binary operation we will need left_var
             right_visit_result = self._visit(tree.right_node)
             left_value = left_visit_result.value
             right_value = right_visit_result.value
             result = UNDEFINED
 
-            if tree.op_token.type == TT_OR:
-                result = typesafe_logical_or(left_value, right_value)
-            elif tree.op_token.type == TT_AND:
-                result = typesafe_logical_and(left_value, right_value)
-    
-            elif tree.op_token.type == TT_LT:
-                result = typesafe_lt(left_value, right_value)
-            elif tree.op_token.type == TT_LE:
-                result = typesafe_le(left_value, right_value)
-            elif tree.op_token.type == TT_GT:
-                result = typesafe_gt(left_value, right_value)
-            elif tree.op_token.type == TT_GE:
-                result = typesafe_ge(left_value, right_value)
-            elif tree.op_token.type == TT_EQUALS:
-                result = typesafe_eq(left_value, right_value)
-            elif tree.op_token.type == TT_NEQUALS:
-                result = typesafe_neq(left_value, right_value)
-
-            elif tree.op_token.type == TT_PLUS:
-                result = typesafe_add(left_value, right_value)
-            elif tree.op_token.type == TT_DASH:
-                result = typesafe_sub(left_value, right_value)
-            elif tree.op_token.type == TT_STAR:
-                result = typesafe_mul(left_value, right_value)
-            elif tree.op_token.type == TT_FSLASH:
-                result = typesafe_div(left_value, right_value)
-            elif tree.op_token.type == TT_PERCENT:
-                result = typesafe_mod(left_value, right_value)
-            elif tree.op_token.type == TT_POW:
-                result = typesafe_pow(left_value, right_value)
-            elif tree.op_token.type == TT_ASSIGN:
+            if tree.op_token.type == TT_ASSIGN:
                 if left_visit_result.var_ref is None:
                     raise ScriptRuntimeError(tree, "Cannot assign to lvalue", tree.op_token)
                 print("Assigning to a reference") # temporary
                 left_visit_result.var_ref.value = right_value
                 result = right_value
             else:
-                raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
+                # raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
+                result = typesafe_binary_op(tree.op_token, left_value, right_value)
 
-            if result is INFINITY:
+            # TODO propagate negative and positive infinity through typesafe math operations instead of erroring
+            if result is INFINITY or result is NEG_INFINITY:
                 raise ScriptRuntimeError(tree, "Division by zero error", tree.op_token)
 
             return VisitResult(result)
@@ -179,6 +136,13 @@ class Interpreter:
             visit_result = VisitResult(UNDEFINED)
             visit_result.break_flag = True
             return visit_result
+        elif isinstance(tree, ReturnStatementNode):
+            visit_result = VisitResult(UNDEFINED)
+            if tree.expression_node is not None:
+                visit_result = self._visit(tree.expression_node)
+            visit_result.return_flag = True
+            visit_result.return_value = visit_result.value
+            return visit_result
         elif tree is None:
             return VisitResult(UNDEFINED) # nothing to do (empty statement)
         else:
@@ -252,8 +216,9 @@ KW_ELSE = "else"
 KW_WHILE = "while"
 KW_FOR = "for"
 KW_BREAK = "break"
+KW_RETURN = "return"
 KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, 
-            KW_WHILE, KW_FOR, KW_BREAK]
+            KW_WHILE, KW_FOR, KW_BREAK, KW_RETURN]
 
 ###############################################################################
 # LEXER CLASSES
@@ -631,8 +596,17 @@ class Parser:
             if self._current_token.type != TT_SEMICOLON:
                 raise ParseError(self.lexer.position, self._current_token, "Expected ';' after break")
             self._advance()
-        # could be an empty statement
-        elif self._current_token.type == TT_SEMICOLON:
+        # a return statement?
+        elif self._current_token.is_keyword(KW_RETURN):
+            self._advance()
+            expression_node = None
+            if self._current_token.type != TT_SEMICOLON:
+                expression_node = self._expr()
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ';' after return statement")
+            statement_node = ReturnStatementNode(expression_node)
+        # could be an empty statement or program
+        elif self._current_token.type == TT_SEMICOLON or self._current_token.type == TT_EOF:
             self._advance()
             statement_node = ExpressionStatementNode(None)
         # else it has to be an expression followed by a semicolon
@@ -819,17 +793,15 @@ class BreakStatementNode:
         return "Break statement"
 
 class ReturnStatementNode:
-    def __init__(self, kw_return_token, expression_node = None):
-        self.kw_return_token = kw_return_token
+    def __init__(self, expression_node = None):
         self.expression_node = expression_node
     def __repr__(self):
         return f"return {self.expression_node}"
 
 ###############################################################################
-# RETURN VALUE FOR VISIT FUNCTION
+# RETURN VALUE FOR INTERPRETER VISIT FUNCTION
 ###############################################################################
 
-# TODO: start using this
 class VisitResult:
     def __init__(self, value):
         self.value = value
@@ -848,129 +820,86 @@ class VisitResult:
 # TODO refactor to avoid code duplication
 # TODO refactor to check for bool or int and return undefined for the rest (future types considered)
 
-def typesafe_logical_and(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    else:
-        return left and right
+def arg_is_numerical(arg):
+    return type(arg) == bool or type(arg) == int or type(arg) == float or isinstance(arg, Infinity)
 
-def typesafe_logical_or(left, right):
+def typesafe_binary_op(op_token, left, right):
     if left is UNDEFINED or right is UNDEFINED:
         return UNDEFINED
-    else:
+    # equality can be tested on anything
+    if op_token.type == TT_EQUALS:
+        return left == right
+    elif op_token.type == TT_NEQUALS:
+        return left != right
+    # one string argument equals string type coercion
+    if type(left) == str or type(right) == str:
+        left = str(left)
+        right = str(right)
+    # for logical boolean operators it should be safe to use on any type
+    if op_token.type == TT_AND:
+        return left and right 
+    elif op_token.type == TT_OR:
         return left or right
+    # for + they can only be numeric or str
+    if op_token.type == TT_PLUS:
+        if (arg_is_numerical(left) or type(left) == str) and (arg_is_numerical(right) or type(right) == str):
+            return left + right
+        else:
+            return UNDEFINED
+    # for -,*,/,%,** they must be a number
+    # TODO add bitwise operations here
+    if op_token.type in [TT_DASH, TT_STAR, TT_FSLASH, TT_PERCENT, TT_POW]:
+        if not arg_is_numerical(left) or not arg_is_numerical(right):
+            return UNDEFINED
+    if op_token.type == TT_DASH:
+        return left - right
+    elif op_token.type == TT_STAR:
+        return left * right
+    elif op_token.type == TT_FSLASH:
+        if right == 0:
+            if left < 0:
+                return NEG_INFINITY
+            elif left > 0:
+                return INFINITY
+            else:
+                return UNDEFINED
+        return left / right
+    elif op_token.type == TT_PERCENT:
+        return left % right
+    elif op_token.type == TT_POW:
+        return left ** right
+    # TODO add bitwise operations here
+    # for comparisons they must both be a numeric type OR the exact same type
+    if not(arg_is_numerical(left) and arg_is_numerical(right)):
+        if type(left) != type(right):
+            return UNDEFINED
+    if op_token.type == TT_GE:
+        return left > right
+    elif op_token.type == TT_GT:
+        return left >= right
+    elif op_token.type == TT_LE:
+        return left < right
+    elif op_token.type == TT_LT:
+        return left <= right
+    print("Warning, unknown binary operator " + op_token.type)
+    return UNDEFINED
 
-def typesafe_logical_not(operand):
+def typesafe_unary_op(op_token, operand):
     if operand is UNDEFINED:
         return UNDEFINED
-    else:
+    # not can be used on anything
+    if op_token.type == TT_NOT:
         return not operand
-
-def typesafe_unary_plus(operand):
-    if operand is UNDEFINED or type(operand) == str:
+    # plus and minus can ONLY be used on numeric
+    if not arg_is_numerical(operand):
         return UNDEFINED
-    else:
+    if op_token.type == TT_PLUS:
         return operand
-
-def typesafe_unary_minus(operand):
-    if operand is UNDEFINED or type(operand) == str:
-        return UNDEFINED
-    else:
+    elif op_token.type == TT_DASH:
         return operand * -1
+    print("Warning, unknown unary operator " + op_token.type)
+    return UNDEFINED
 
-def typesafe_add(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return str(left) + str(right)
-    else:
-        return left + right
-
-def typesafe_sub(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return UNDEFINED
-    else:
-        return left - right
-
-def typesafe_mul(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return UNDEFINED
-    else:
-        return left * right
-
-def typesafe_div(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return UNDEFINED
-    elif right == 0:
-        return INFINITY
-    else:
-        return left / right
-
-def typesafe_mod(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return UNDEFINED
-    else:
-        return left % right
-
-def typesafe_pow(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return UNDEFINED
-    else:
-        return left ** right
-
-def typesafe_eq(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    else:
-        return left == right
-
-def typesafe_neq(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    else:
-        return left != right
-
-def typesafe_lt(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return str(left) < str(right)
-    else:
-        return left < right
-
-def typesafe_le(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return str(left) <= str(right)
-    else:
-        return left <= right
-
-def typesafe_gt(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return str(left) > str(right)
-    else:
-        return left > right
-
-def typesafe_ge(left, right):
-    if left is UNDEFINED or right is UNDEFINED:
-        return UNDEFINED
-    elif type(left) == str or type(right) == str:
-        return str(left) >= str(right)
-    else:
-        return left >= right
 
 # singleton for default values of uninitialized variables. propagates through typesafe_ operations
 class Undefined:
@@ -991,8 +920,8 @@ class Infinity:
         else:
             return "-Infinity"
 
-# TODO rather than use this singleton, check for isinstance(Infinity) when propagating Infinity value from division by zero
 INFINITY = Infinity()
+NEG_INFINITY = Infinity(True)
 
 ###############################################################################
 # RUNTIME CONTEXT
