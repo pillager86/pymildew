@@ -1023,13 +1023,13 @@ def typesafe_binary_op(op_token, left, right):
         if type(left) != type(right):
             return UNDEFINED
     if op_token.type == TT_GE:
-        return left > right
-    elif op_token.type == TT_GT:
         return left >= right
+    elif op_token.type == TT_GT:
+        return left > right
     elif op_token.type == TT_LE:
-        return left < right
-    elif op_token.type == TT_LT:
         return left <= right
+    elif op_token.type == TT_LT:
+        return left < right
     print("Warning, unknown binary operator " + op_token.type)
     return UNDEFINED
 
@@ -1142,10 +1142,10 @@ def native_parseInt(string):
     try:
         return int(string)
     except ValueError:
-        return UNDEFINED
+        return 0
 
 def native_parseFloat(string):
     try:
         return float(string)
     except ValueError:
-        return UNDEFINED
+        return 0.0
