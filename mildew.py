@@ -24,6 +24,7 @@ class Interpreter:
         parser = Parser(text)
         statement_list = parser.parse()
         program_block = BlockNode(statement_list)
+        print(program_block) # temporary, to see node structures
         visit_result = self._visit(program_block)
         return visit_result.value
 
@@ -65,6 +66,8 @@ class Interpreter:
         elif isinstance(tree, ExpressionStatementNode):
             visit_result = self._visit(tree.node)
             print("Expression statement result: " + str(visit_result.value)) # temporary
+            # temporary: expression statements have their effect through function calls and should not return 
+            #            a value. Only expressions themselves should return a value
             return visit_result
         elif isinstance(tree, BlockNode):
             self.current_context = ScriptContext(self.current_context)
@@ -196,6 +199,12 @@ TT_STAR             = "STAR"        # *
 TT_FSLASH           = "FSLASH"      # /
 TT_PERCENT          = "PERCENT"     # %
 TT_POW              = "POW"         # **
+TT_BIT_AND          = "BIT_AND"     # &
+TT_BIT_OR           = "BIT_OR"      # |
+TT_BIT_XOR          = "BIT_XOR"     # ^
+TT_BIT_NOT          = "BIT_NOT"     # ~
+TT_BIT_LSHIFT       = "BIT_LSHIFT"  # <<
+TT_BIT_RSHIFT       = "BIT_RSHIFT"  # >>
 TT_LPAREN           = "LPAREN"      # (
 TT_RPAREN           = "RPAREN"      # )
 TT_LBRACE           = "LBRACE"      # {
@@ -361,12 +370,18 @@ class Lexer:
             if self._peek_char() == '=':
                 self._advance_char()
                 token = Token(TT_GE, self.position)
+            elif self._peek_char() == '>':
+                self._advance_char()
+                token = Token(TT_BIT_RSHIFT, self.position)
             else:
                 token = Token(TT_GT, self.position)
         elif self._current_char() == '<':
             if self._peek_char() == '=':
                 self._advance_char()
                 token = Token(TT_LE, self.position)
+            elif self._peek_char() == '<':
+                self._advance_char()
+                token = Token(TT_BIT_LSHIFT, self.position)
             else:
                 token = Token(TT_LT, self.position)
         elif self._current_char() == '=':
@@ -386,13 +401,13 @@ class Lexer:
                 self._advance_char()
                 token = Token(TT_AND, self.position)
             else:
-                raise LexerError(self.position, "Bitwise and & not supported yet")
+                token = Token(TT_BIT_AND, self.position)
         elif self._current_char() == '|':
             if self._peek_char() == '|':
                 self._advance_char()
                 token = Token(TT_OR, self.position)
             else:
-                raise LexerError(self.position, "Bitwise or | not supported yet")
+                token = Token(TT_BIT_OR, self.position)
         # MATH OPERATORS
         elif self._current_char() == '+':
             token = Token(TT_PLUS, self.position)
@@ -408,6 +423,10 @@ class Lexer:
             token = Token(TT_FSLASH, self.position)
         elif self._current_char() == '%':
             token = Token(TT_PERCENT, self.position)
+        elif self._current_char() == '^':
+            token = Token(TT_BIT_XOR, self.position)
+        elif self._current_char() == '~':
+            token = Token(TT_BIT_NOT, self.position)
         # PARENTHESES
         elif self._current_char() == '(':
             token = Token(TT_LPAREN, self.position)
@@ -450,7 +469,7 @@ class Lexer:
 
 def unary_op_priority(token):
     # see grammar.txt for explanation of magic constants
-    if token.type in [TT_NOT, TT_PLUS, TT_DASH]:
+    if token.type in [TT_BIT_NOT, TT_NOT, TT_PLUS, TT_DASH]:
         return 17
     else:
         return 0
@@ -463,10 +482,18 @@ def binary_op_priority(token):
         return 15
     elif token.type in [TT_PLUS, TT_DASH]:
         return 14
+    elif token.type in [TT_BIT_RSHIFT, TT_BIT_LSHIFT]:
+        return 13
     elif token.type in [TT_LT, TT_LE, TT_GT, TT_GE]:
         return 12
     elif token.type in [TT_EQUALS, TT_NEQUALS]:
         return 11
+    elif token.type == TT_BIT_AND:
+        return 10
+    elif token.type == TT_BIT_XOR:
+        return 9
+    elif token.type == TT_BIT_OR:
+        return 8
     elif token.type == TT_AND:
         return 7
     elif token.type == TT_OR:
@@ -841,9 +868,9 @@ def typesafe_binary_op(op_token, left, right):
             return left + right
         else:
             return UNDEFINED
-    # for -,*,/,%,** they must be a number
-    # TODO add bitwise operations here
-    if op_token.type in [TT_DASH, TT_STAR, TT_FSLASH, TT_PERCENT, TT_POW]:
+    # for -,*,/,%,**, &, ^, | they must be a number
+    if op_token.type in [TT_DASH, TT_STAR, TT_FSLASH, TT_PERCENT, TT_POW, \
+                         TT_BIT_AND, TT_BIT_XOR, TT_BIT_OR, TT_BIT_LSHIFT, TT_BIT_RSHIFT]:
         if not arg_is_numerical(left) or not arg_is_numerical(right):
             return UNDEFINED
     if op_token.type == TT_DASH:
@@ -863,7 +890,16 @@ def typesafe_binary_op(op_token, left, right):
         return left % right
     elif op_token.type == TT_POW:
         return left ** right
-    # TODO add bitwise operations here
+    elif op_token.type == TT_BIT_AND:
+        return left & right
+    elif op_token.type == TT_BIT_XOR:
+        return left ^ right
+    elif op_token.type == TT_BIT_OR:
+        return left | right
+    elif op_token.type == TT_BIT_LSHIFT:
+        return left << right
+    elif op_token.type == TT_BIT_RSHIFT:
+        return left >> right
     # for comparisons they must both be a numeric type OR the exact same type
     if not(arg_is_numerical(left) and arg_is_numerical(right)):
         if type(left) != type(right):
@@ -885,13 +921,15 @@ def typesafe_unary_op(op_token, operand):
     # not can be used on anything
     if op_token.type == TT_NOT:
         return not operand
-    # plus and minus can ONLY be used on numeric
+    # plus and minus and bit_not can ONLY be used on numeric
     if not arg_is_numerical(operand):
         return UNDEFINED
     if op_token.type == TT_PLUS:
         return operand
     elif op_token.type == TT_DASH:
         return operand * -1
+    elif op_token.type == TT_BIT_NOT:
+        return ~operand
     print("Warning, unknown unary operator " + op_token.type)
     return UNDEFINED
 
