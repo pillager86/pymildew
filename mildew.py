@@ -8,6 +8,7 @@ class Interpreter:
         '''Constructs a new Interpreter'''
         self.global_context = ScriptContext(None)
         self.current_context = self.global_context
+        # TODO we should create a type for returning from _visit with all this information instead of using these flags
         self.return_value = UNDEFINED
         self.return_value_is_set = False
         self.break_flag = False
@@ -34,22 +35,25 @@ class Interpreter:
 
     def _visit(self, tree): # returns any value and possible VarReference
         if isinstance(tree, LiteralNode):
-            return tree.value, None
+            return VisitResult(tree.value)
         elif isinstance(tree, UnaryOpNode):
-            value, _ = self._visit(tree.node)
+            visit_result = self._visit(tree.node)
+            value = visit_result.value
             # TODO var_ref will have to be handled and returned for postfix and prefix operations
             if tree.op_token.type == TT_NOT:
-                return typesafe_logical_not(value), None
+                return VisitResult(typesafe_logical_not(value))
             elif tree.op_token.type == TT_DASH:
-                return typesafe_unary_minus(value), None
+                return VisitResult(typesafe_unary_minus(value))
             elif tree.op_token.type == TT_PLUS:
-                return typesafe_unary_plus(value), None
+                return VisitResult(typesafe_unary_plus(value))
             else:
                 raise ScriptRuntimeError(tree, "Unknown unary operator", tree.op_token)
         elif isinstance(tree, BinaryOpNode):
-            left_value, left_ref = self._visit(tree.left_node)
+            left_visit_result = self._visit(tree.left_node)
             # if = is parsed as a regular binary operation we will need left_var
-            right_value, __ = self._visit(tree.right_node)
+            right_visit_result = self._visit(tree.right_node)
+            left_value = left_visit_result.value
+            right_value = right_visit_result.value
             result = UNDEFINED
 
             if tree.op_token.type == TT_OR:
@@ -83,10 +87,10 @@ class Interpreter:
             elif tree.op_token.type == TT_POW:
                 result = typesafe_pow(left_value, right_value)
             elif tree.op_token.type == TT_ASSIGN:
-                if left_ref is None:
+                if left_visit_result.var_ref is None:
                     raise ScriptRuntimeError(tree, "Cannot assign to lvalue", tree.op_token)
-                print("Assigning to a reference")
-                left_ref.value = right_value
+                print("Assigning to a reference") # temporary
+                left_visit_result.var_ref.value = right_value
                 result = right_value
             else:
                 raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
@@ -94,86 +98,93 @@ class Interpreter:
             if result is INFINITY:
                 raise ScriptRuntimeError(tree, "Division by zero error", tree.op_token)
 
-            return result, None
+            return VisitResult(result)
         elif isinstance(tree, VarAccessNode):
-            result = self.current_context.access_variable(tree.id_token.text)
+            var_ref = self.current_context.access_variable(tree.id_token.text)
             if not self.current_context.var_exists(tree.id_token.text):
                 raise ScriptRuntimeError(tree, "Undefined variable", tree.id_token)
-            return result.value, result
+            visit_result = VisitResult(var_ref.value)
+            visit_result.var_ref = var_ref
+            return visit_result
         elif isinstance(tree, ExpressionStatementNode):
-            result, _ = self._visit(tree.node)
-            print("Expression statement result: " + str(result)) # temporary
-            return result, None
+            visit_result = self._visit(tree.node)
+            print("Expression statement result: " + str(visit_result.value)) # temporary
+            return visit_result
         elif isinstance(tree, BlockNode):
             self.current_context = ScriptContext(self.current_context)
+            visit_result = VisitResult(UNDEFINED)
             for each_node in tree.statement_nodes:
-                result, _ = self._visit(each_node)
-                # TODO check for return value set and stop executing rest by breaking
-                if self.break_flag:
-                    break # only while and for loops may unset the break flag
+                visit_result = self._visit(each_node)
+                if visit_result.break_flag or visit_result.return_flag:
+                    break
             self.current_context = self.current_context.parent
-            return result, None
+            return visit_result
         elif isinstance(tree, VarDeclarationNode):
             if tree.kw_spec_token.text == "let":
                 declfunc = self.current_context.declare_variable
-            else:
+            else: # TODO implement const eventually
                 declfunc = self.global_context.declare_variable
             for i in range(len(tree.var_tokens)):
                 value = UNDEFINED
                 if tree.expression_nodes[i] is not None:
-                    value, _ = self._visit(tree.expression_nodes[i])
-                success = declfunc(tree.var_tokens[i].text, value)
+                    visit_result = self._visit(tree.expression_nodes[i])
+                success = declfunc(tree.var_tokens[i].text, visit_result.value)
                 if not success:
                     raise ScriptRuntimeError(tree, "Cannot redeclare variable " + tree.var_tokens[i].text, tree.var_tokens[i])
-            result = UNDEFINED # this type of expression cannot evaluate to anything
-            return result, None
+            return VisitResult(UNDEFINED) # this can't return anything meaningful
         elif isinstance(tree, IfStatementNode):
-            condition, _ = self._visit(tree.condition_node)
-            if condition:
-                self._visit(tree.if_statement)
+            condition_result = self._visit(tree.condition_node)
+            visit_result = VisitResult(UNDEFINED)
+            if condition_result.value:
+                visit_result = self._visit(tree.if_statement)
             else:
                 if tree.else_statement is not None:
-                    self._visit(tree.else_statement)
-            return UNDEFINED, None # no meaningful return value
+                    visit_result = self._visit(tree.else_statement)
+            return visit_result
         elif isinstance(tree, WhileStatementNode):
-            condition, _ = self._visit(tree.condition_node)
-            while condition:
+            visit_result_condition = self._visit(tree.condition_node)
+            loop_result = VisitResult(UNDEFINED)
+            while visit_result_condition.value:
                 # TODO check for return value set and exit if so
-                self._visit(tree.loop_statement)
-                if self.break_flag:
-                    self.break_flag = False
+                loop_result = self._visit(tree.loop_statement)
+                if loop_result.break_flag:
+                    loop_result.break_flag = False
                     break
-                condition, _ = self._visit(tree.condition_node)
-            return UNDEFINED, None
+                if loop_result.return_flag:
+                    break
+                visit_result_condition = self._visit(tree.condition_node)
+            return loop_result
         elif isinstance(tree, ForStatementNode):
             self.current_context = ScriptContext(self.current_context)
             self._visit(tree.init_statement)
-            if(tree.condition_node is None):
-                condition = True
-            else:
-                condition, _ = self._visit(tree.condition_node)
-            while condition:
-                # TODO check for return value set and exit if so
-                self._visit(tree.loop_statement)
-                if self.break_flag:
-                    self.break_flag = False
+            condition_result = VisitResult(True)
+            body_result = VisitResult(UNDEFINED)
+            if tree.condition_node is not None:
+                condition_result = self._visit(tree.condition_node)
+            while condition_result.value:
+                body_result = self._visit(tree.loop_statement)
+                if body_result.break_flag:
+                    body_result.break_flag = False
+                    break
+                if body_result.return_flag:
                     break
                 self._visit(tree.increment_node)
-                if(tree.condition_node is None):
-                    condition = True
+                if tree.condition_node is None:
+                    condition_result.value = True
                 else:
-                    condition, _ = self._visit(tree.condition_node)
+                    condition_result = self._visit(tree.condition_node)
             self.current_context = self.current_context.parent
-            return UNDEFINED, None
+            return body_result
         elif isinstance(tree, BreakStatementNode):
-            self.break_flag = True
-            return UNDEFINED, None
+            visit_result = VisitResult(UNDEFINED)
+            visit_result.break_flag = True
+            return visit_result
         elif tree is None:
-            return UNDEFINED, None # nothing to do (empty statement)
+            return VisitResult(UNDEFINED) # nothing to do (empty statement)
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
-        return UNDEFINED, None
+        return VisitResult(UNDEFINED)
 
 ###############################################################################
 # ERRORS
@@ -323,6 +334,7 @@ class Lexer:
             return '\0'
 
     def next_token(self, consume=True):
+        # TODO support // and /* ... */ comments
         # in case we are only peeking
         old_char_counter = self._char_counter
         old_position = self.position.copy()
@@ -699,6 +711,8 @@ class Parser:
             self._advance()
         else:
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
+        # TODO this is where we will handle the dot operator and function call as well as array access
+        #      also where to handle postfix and prefix operator possibly
         return left
 
     # helper functions
@@ -805,11 +819,27 @@ class BreakStatementNode:
         return "Break statement"
 
 class ReturnStatementNode:
-    def __init__(self, kw_return_token, node):
+    def __init__(self, kw_return_token, expression_node = None):
         self.kw_return_token = kw_return_token
-        self.node = node
+        self.expression_node = expression_node
     def __repr__(self):
-        return f"return {self.node}"
+        return f"return {self.expression_node}"
+
+###############################################################################
+# RETURN VALUE FOR VISIT FUNCTION
+###############################################################################
+
+# TODO: start using this
+class VisitResult:
+    def __init__(self, value):
+        self.value = value
+        self.var_ref = None
+        self.return_value = UNDEFINED
+        self.return_flag = False
+        self.break_flag = False
+    def __repr__(self):
+        return f"value={self.value}, var_ref={self.var_ref}, return_value={self.return_value}, " \
+                + f"return_flag={self.return_flag}, break_flag={self.break_flag}"
 
 ###############################################################################
 # TYPESAFE OPERATIONS
