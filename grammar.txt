@@ -1,7 +1,7 @@
-# OPERATOR PRECEDENCE
+# OPERATOR PRECEDENCE (TODO update this list)
 17  NOT, UNARY PLUS, UNARY DASH
 
-16  EXP (right-assoc)
+16  POW (right-assoc)
 
 15  STAR, FSLASH, PERCENT (left-assoc)
 
@@ -27,6 +27,7 @@ statement       ::=     var-decl SEMICOLON
                         | block
                         | KEYWORD:if LPAREN expr RPAREN statement (KEYWORD:else statement)?
                         | KEYWORD:while LPAREN expr RPAREN statement
+                        | KEYWORD:do statement KEYWORD:while LPAREN expr RPAREN SEMICOLON
                         | KEYWORD:for LPAREN statement expr SEMICOLON expr RPAREN statement
                         | KEYWORD:break SEMICOLON
                         | KEYWORD:return expr? SEMICOLON
@@ -49,4 +50,5 @@ expr            ::=     (NOT|PLUS|DASH) expr |
 
 primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE 
                         | (KEYWORD:true|KEYWORD:false|KEYWORD:undefined) | STRING | IDENTIFIER
+                        | primary-expr LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN
                         

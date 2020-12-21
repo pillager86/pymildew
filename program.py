@@ -2,6 +2,16 @@ import sys
 
 from mildew import Interpreter, LexerError, ParseError, ScriptRuntimeError
 
+def native_print(string):
+    print(string)
+
+def native_input(string):
+    try:
+        result = input(string)
+        return result
+    except EOFError:
+        return None
+
 def eval_with_error_checking(interpreter : Interpreter, text : str, file_name : str = "<stdin>") -> any:
     result = None
     try:
@@ -23,6 +33,8 @@ def eval_with_error_checking(interpreter : Interpreter, text : str, file_name : 
 # TODO we need something better than input() that allows arrow keys to be used
 def main(args):
     interpreter = Interpreter()
+    interpreter.set_global("print", native_print)
+    interpreter.set_global("input", native_input)
     if len(args) > 1:
         file_to_read = args[1]
         input_file = open(file_to_read, "r")

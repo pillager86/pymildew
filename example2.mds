@@ -1,0 +1,14 @@
+var userInput, num;
+
+while(true) {
+    userInput = input("Enter a number between 1 and 10: ");
+    num = parseInt(userInput);
+    if(num >= 1 && num <= 10) {
+        print("Good, you entered " + num);
+        break;
+    } else {
+        print("That's not valid, try again");
+    }
+}
+
+print("End of program");

@@ -1,3 +1,5 @@
+from inspect import signature
+
 ###############################################################################
 # PUBLIC INTERFACE
 ###############################################################################
@@ -8,10 +10,9 @@ class Interpreter:
         '''Constructs a new Interpreter'''
         self.global_context = ScriptContext(None)
         self.current_context = self.global_context
-        # TODO we should create a type for returning from _visit with all this information instead of using these flags
-        self.return_value = UNDEFINED
-        self.return_value_is_set = False
-        self.break_flag = False
+        # set builtins
+        self.global_context.force_set_variable("parseInt", native_parseInt)
+        self.global_context.force_set_variable("parseFloat", native_parseFloat)
 
     def evaluate(self, text):
         '''Evaluates a set of statements'''
@@ -27,6 +28,9 @@ class Interpreter:
         print(program_block) # temporary, to see node structures
         visit_result = self._visit(program_block)
         return visit_result.value
+
+    def set_global(self, name, value):
+        self.global_context.force_set_variable(name, value)
 
     def _visit(self, tree):
         if isinstance(tree, LiteralNode):
@@ -114,6 +118,18 @@ class Interpreter:
                     break
                 visit_result_condition = self._visit(tree.condition_node)
             return loop_result
+        elif isinstance(tree, DoWhileStatementNode):
+            loop_result = self._visit(tree.loop_statement) # do at least once
+            condition_result = self._visit(tree.condition_node)
+            while condition_result.value:
+                if loop_result.break_flag:
+                    loop_result.break_flag = False
+                    break
+                if loop_result.return_flag:
+                    break
+                loop_result = self._visit(tree.loop_statement)
+                condition_result = self._visit(tree.condition_node)
+            return loop_result
         elif isinstance(tree, ForStatementNode):
             self.current_context = ScriptContext(self.current_context)
             self._visit(tree.init_statement)
@@ -146,6 +162,23 @@ class Interpreter:
             visit_result.return_flag = True
             visit_result.return_value = visit_result.value
             return visit_result
+        elif isinstance(tree, FunctionCallNode):
+            fn_to_call = self._visit(tree.fn_expression)
+            if fn_to_call.var_ref is None:
+                raise ScriptRuntimeError(tree, "Cannot call function " + str(fn_to_call.value))
+            args_to_pass = []
+            for arg in tree.arg_expressions:
+                arg_visit = self._visit(arg)
+                args_to_pass.append(arg_visit.value)
+            # is this a native Python function?
+            if callable(fn_to_call.value):
+                sig = signature(fn_to_call.value)
+                if(len(args_to_pass) != len(sig.parameters)):
+                    raise ScriptRuntimeError(tree, "Wrong number of args for native function. " \
+                        + f"Expected {len(sig.parameters)} got {len(args_to_pass)}")
+                return VisitResult(fn_to_call.value(*args_to_pass))
+            else:
+                raise ScriptRuntimeError(tree, "Cannot call a non function")
         elif tree is None:
             return VisitResult(UNDEFINED) # nothing to do (empty statement)
         else:
@@ -223,11 +256,12 @@ KW_LET              = "let"
 KW_IF               = "if"
 KW_ELSE             = "else"
 KW_WHILE            = "while"
+KW_DO               = "do"
 KW_FOR              = "for"
 KW_BREAK            = "break"
 KW_RETURN           = "return"
 KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, 
-            KW_WHILE, KW_FOR, KW_BREAK, KW_RETURN]
+            KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_RETURN]
 
 ###############################################################################
 # LEXER CLASSES
@@ -587,6 +621,24 @@ class Parser:
             self._advance()
             loop_statement = self._statement()
             statement_node = WhileStatementNode(condition_node, loop_statement)
+        # is it a do-while statement?
+        elif self._current_token.is_keyword(KW_DO):
+            self._advance()
+            loop_statement = self._statement()
+            if not self._current_token.is_keyword(KW_WHILE):
+                raise ParseError(self.lexer.position, self._current_token, "Expected while keyword after do block")
+            self._advance()
+            if self._current_token.type != TT_LPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '(' after while")
+            self._advance()
+            condition_node = self._expr()
+            if self._current_token.type != TT_RPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ')' after do while loop condition")
+            self._advance()
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ';' after do-while statement")
+            self._advance()
+            statement_node = DoWhileStatementNode(loop_statement, condition_node)
         # is it a for statement?
         elif self._current_token.is_keyword(KW_FOR):
             self._advance()
@@ -708,7 +760,19 @@ class Parser:
             self._advance()
         else:
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
-        # TODO this is where we will handle the dot operator and function call as well as array access
+        # we have a primary-expr now see if there are parentheses turning this into a function call
+        if self._current_token.type == TT_LPAREN:
+            self._advance()
+            arg_expressions = []
+            while self._current_token.type != TT_RPAREN and self._current_token.type != TT_EOF:
+                arg_expressions.append(self._expr())
+                if self._current_token.type == TT_COMMA:
+                    self._advance()
+                elif self._current_token.type == TT_RPAREN:
+                    self._advance()
+                    break
+            left = FunctionCallNode(left, arg_expressions)
+        # TODO this is where we will handle the dot operator as well as array access
         #      also where to handle postfix and prefix operator possibly
         return left
 
@@ -800,6 +864,13 @@ class WhileStatementNode:
     def __repr__(self):
         return f"while({self.condition_node}) {self.loop_statement}"
 
+class DoWhileStatementNode:
+    def __init__(self, loop_statement, condition_node):
+        self.loop_statement = loop_statement
+        self.condition_node = condition_node
+    def __repr__(self):
+        return f"do {self.loop_statement} while({self.condition_node})"
+
 class ForStatementNode:
     def __init__(self, init_statement, condition_node, increment_node, loop_statement):
         self.init_statement = init_statement
@@ -820,6 +891,53 @@ class ReturnStatementNode:
         self.expression_node = expression_node
     def __repr__(self):
         return f"return {self.expression_node}"
+
+class FunctionCallNode:
+    def __init__(self, fn_expression, arg_expressions):
+        self.fn_expression = fn_expression # most likely should be a var access
+        self.arg_expressions = arg_expressions
+    def __repr__(self):
+        rep = f"Function call: {self.fn_expression}("
+        for arg in range(len(self.arg_expressions)):
+            rep += str(self.arg_expressions[arg])
+            if arg < len(self.arg_expressions) - 1:
+                rep += ", "
+        rep += ")"
+        return rep
+
+class FunctionDeclarationNode:
+    def __init__(self, id_token, arg_name_tokens, statement_nodes):
+        self.id_token = id_token
+        self.arg_name_tokens = arg_name_tokens
+        self.statement_nodes = statement_nodes
+    def __repr__(self):
+        rep = f"Function declaration: {self.id_token.text}("
+        for arg in range(len(self.arg_name_tokens)):
+            rep += str(self.arg_name_tokens[arg].text)
+            if arg < len(self.arg_name_tokens) - 1:
+                rep += ", "
+        rep += ") {"
+        for statement_node in self.statement_nodes:
+            rep += f"\t{statement_node}"
+        rep += "}"
+        return rep
+
+
+
+###############################################################################
+# FUNCTION TYPE
+###############################################################################
+class ScriptFunction:
+    def __init__(self, arg_names, statement_nodes, name="<anonymous function>"):
+        self.arg_names = arg_names
+        self.statement_nodes = statement_nodes
+        self.name = name
+    def __repr__(self):
+        rep = f"function {self.name}{tuple(self.arg_names)}" + "{"
+        for statement_node in self.statement_nodes:
+            rep += f"\t{statement_node}"
+        rep += "}"
+        return rep
 
 ###############################################################################
 # RETURN VALUE FOR INTERPRETER VISIT FUNCTION
@@ -1011,3 +1129,23 @@ class ScriptContext:
             return False
         else:
             return True
+
+    # to be used by the host environment to set globals
+    def force_set_variable(self, name, value):
+        self.variables[name] = VarReference(value)
+
+###############################################################################
+# ESSENTIAL BUILTIN FUNCTIONS
+###############################################################################
+
+def native_parseInt(string):
+    try:
+        return int(string)
+    except ValueError:
+        return UNDEFINED
+
+def native_parseFloat(string):
+    try:
+        return float(string)
+    except ValueError:
+        return UNDEFINED
