@@ -44,8 +44,7 @@ class Interpreter:
             if tree.op_token.type == TT_ASSIGN:
                 if left_visit_result.var_ref is None:
                     raise ScriptRuntimeError(tree, "Cannot assign to lvalue", tree.op_token)
-                print("Assigning to a reference") # temporary
-                left_visit_result.var_ref.value = right_value
+                self.current_context.reassign_variable(tree.left_node.id_token.text, right_value)
                 result = right_value
             else:
                 # raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
@@ -648,7 +647,7 @@ class Parser:
         return left
 
     def _primary_expr(self):
-        # TODO check for prefix and postfix increment/decrement operators on identifiers
+        # TODO check for postfix increment/decrement operators on identifiers
         #       will also have to account for member access (.) situations
         left = None
         if self._current_token.type == TT_LPAREN:
@@ -814,8 +813,7 @@ class VisitResult:
 # TYPESAFE OPERATIONS
 ###############################################################################
 
-# TODO refactor to avoid code duplication
-# TODO refactor to check for bool or int and return undefined for the rest (future types considered)
+# TODO handle infinity as a valid value
 
 def arg_is_numerical(arg):
     return type(arg) == bool or type(arg) == int or type(arg) == float or isinstance(arg, Infinity)
@@ -924,6 +922,7 @@ NEG_INFINITY = Infinity(True)
 # RUNTIME CONTEXT
 ###############################################################################
 
+# Since Python doesn't have pointers we wrap variable values in a reference like this
 class VarReference:
     def __init__(self, value):
         self.value = value
@@ -958,6 +957,7 @@ class ScriptContext:
                 context.variables[name].value = value
                 return context.variables[name]
 
+    # this only declares a local variable in this context that may shadow globals
     def declare_variable(self, name, value=UNDEFINED):
         if not name in self.variables:
             self.variables[name] = VarReference(value)
