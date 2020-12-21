@@ -251,6 +251,7 @@ TT_COMMA            = "COMMA"       # ,
 KW_TRUE             = "true"
 KW_FALSE            = "false"
 KW_UNDEFINED        = "undefined"
+KW_NULL             = "null"
 KW_VAR              = "var"
 KW_LET              = "let"
 KW_IF               = "if"
@@ -260,7 +261,8 @@ KW_DO               = "do"
 KW_FOR              = "for"
 KW_BREAK            = "break"
 KW_RETURN           = "return"
-KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, 
+KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_NULL, 
+            KW_VAR, KW_LET, KW_IF, KW_ELSE, 
             KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_RETURN]
 
 ###############################################################################
@@ -749,6 +751,8 @@ class Parser:
                 left = LiteralNode(False)
             elif self._current_token.text == KW_UNDEFINED:
                 left = LiteralNode(UNDEFINED)
+            elif self._current_token.text == KW_NULL:
+                left = LiteralNode(NULL)
             else:
                 raise ParseError(self._current_token.position, self._current_token, "Unexpected keyword")
             self._advance()
@@ -961,7 +965,8 @@ class VisitResult:
 # TODO handle infinity as a valid value
 
 def arg_is_numerical(arg):
-    return type(arg) == bool or type(arg) == int or type(arg) == float or isinstance(arg, Infinity)
+    return type(arg) == bool or type(arg) == int or type(arg) == float or isinstance(arg, Infinity) \
+            or arg is None # None will get casted to 0
 
 def typesafe_binary_op(op_token, left, right):
     if left is UNDEFINED or right is UNDEFINED:
@@ -991,6 +996,10 @@ def typesafe_binary_op(op_token, left, right):
                          TT_BIT_AND, TT_BIT_XOR, TT_BIT_OR, TT_BIT_LSHIFT, TT_BIT_RSHIFT]:
         if not arg_is_numerical(left) or not arg_is_numerical(right):
             return UNDEFINED
+    if left is None:
+        left = 0
+    if right is None:
+        right = 0
     if op_token.type == TT_DASH:
         return left - right
     elif op_token.type == TT_STAR:
@@ -1060,6 +1069,9 @@ class Undefined:
         return "undefined"
 
 UNDEFINED = Undefined()
+
+# None is used as the value of null
+NULL = None
 
 # TODO propagate positive or negative Infinity through math ops instead of erroring out
 class Infinity:
@@ -1141,11 +1153,11 @@ class ScriptContext:
 def native_parseInt(string):
     try:
         return int(string)
-    except ValueError:
-        return 0
+    except ValueError: # TODO throw ScriptException that can be sometime caught by script itself
+        return None
 
 def native_parseFloat(string):
     try:
         return float(string)
-    except ValueError:
-        return 0.0
+    except ValueError: # TODO throw ScriptException that can be sometime caught by script itself
+        return None
