@@ -28,6 +28,7 @@ statement       ::=     var-decl SEMICOLON
                         | KEYWORD:if LPAREN expr RPAREN statement (KEYWORD:else statement)?
                         | KEYWORD:while LPAREN expr RPAREN statement
                         | KEYWORD:for LPAREN statement expr SEMICOLON expr RPAREN statement
+                        | KEYWORD:break SEMICOLON
                         | SEMICOLON # empty statement
 
 block           ::=     LBRACE statement* RBRACE

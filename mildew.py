@@ -10,6 +10,7 @@ class Interpreter:
         self.current_context = self.global_context
         self.return_value = UNDEFINED
         self.return_value_is_set = False
+        self.break_flag = False
 
     def evaluate(self, text):
         '''Evaluates a set of statements'''
@@ -108,6 +109,8 @@ class Interpreter:
             for each_node in tree.statement_nodes:
                 result, _ = self._visit(each_node)
                 # TODO check for return value set and stop executing rest by breaking
+                if self.break_flag:
+                    break # only while and for loops may unset the break flag
             self.current_context = self.current_context.parent
             return result, None
         elif isinstance(tree, VarDeclarationNode):
@@ -135,7 +138,11 @@ class Interpreter:
         elif isinstance(tree, WhileStatementNode):
             condition, _ = self._visit(tree.condition_node)
             while condition:
+                # TODO check for return value set and exit if so
                 self._visit(tree.loop_statement)
+                if self.break_flag:
+                    self.break_flag = False
+                    break
                 condition, _ = self._visit(tree.condition_node)
             return UNDEFINED, None
         elif isinstance(tree, ForStatementNode):
@@ -146,7 +153,11 @@ class Interpreter:
             else:
                 condition, _ = self._visit(tree.condition_node)
             while condition:
+                # TODO check for return value set and exit if so
                 self._visit(tree.loop_statement)
+                if self.break_flag:
+                    self.break_flag = False
+                    break
                 self._visit(tree.increment_node)
                 if(tree.condition_node is None):
                     condition = True
@@ -154,12 +165,15 @@ class Interpreter:
                     condition, _ = self._visit(tree.condition_node)
             self.current_context = self.current_context.parent
             return UNDEFINED, None
+        elif isinstance(tree, BreakStatementNode):
+            self.break_flag = True
+            return UNDEFINED, None
         elif tree is None:
             return UNDEFINED, None # nothing to do (empty statement)
         else:
             raise ScriptRuntimeError(tree, "Cannot visit unknown node type " + str(type(tree)))
         
-        return None, None
+        return UNDEFINED, None
 
 ###############################################################################
 # ERRORS
@@ -226,7 +240,9 @@ KW_IF = "if"
 KW_ELSE = "else"
 KW_WHILE = "while"
 KW_FOR = "for"
-KEYWORDS = [ KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, KW_WHILE, KW_FOR ]
+KW_BREAK = "break"
+KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_VAR, KW_LET, KW_IF, KW_ELSE, 
+            KW_WHILE, KW_FOR, KW_BREAK]
 
 ###############################################################################
 # LEXER CLASSES
@@ -596,6 +612,13 @@ class Parser:
             self._advance()
             loop_statement = self._statement()
             statement_node = ForStatementNode(init_statement, condition_node, increment_node, loop_statement)
+        # a break statement?
+        elif self._current_token.is_keyword(KW_BREAK):
+            statement_node = BreakStatementNode(self._current_token)
+            self._advance()
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ';' after break")
+            self._advance()
         # could be an empty statement
         elif self._current_token.type == TT_SEMICOLON:
             self._advance()
@@ -774,6 +797,12 @@ class ForStatementNode:
         self.loop_statement = loop_statement
     def __repr__(self):
         return f"for({self.init_statement};{self.condition_node};{self.increment_node}) {self.loop_statement}"
+
+class BreakStatementNode:
+    def __init__(self, break_token):
+        self.break_token = break_token
+    def __repr__(self):
+        return "Break statement"
 
 class ReturnStatementNode:
     def __init__(self, kw_return_token, node):
