@@ -12,6 +12,9 @@ def native_input(string):
     except EOFError:
         return None
 
+def native_test():
+    print("native_test called")
+
 def eval_with_error_checking(interpreter : Interpreter, text : str, file_name : str = "<stdin>") -> any:
     result = None
     try:
@@ -35,6 +38,7 @@ def main(args):
     interpreter = Interpreter()
     interpreter.set_global("print", native_print)
     interpreter.set_global("input", native_input)
+    interpreter.set_global("testObject", { "foo": 69, "test": native_test })
     if len(args) > 1:
         file_to_read = args[1]
         input_file = open(file_to_read, "r")

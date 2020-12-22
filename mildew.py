@@ -42,9 +42,39 @@ class Interpreter:
         elif isinstance(tree, BinaryOpNode):
             left_visit_result = self._visit(tree.left_node)
             left_value = left_visit_result.value
-            # TODO we will need to handle the dot operator here instead of simply trying to evaluate the right side
-            right_visit_result = self._visit(tree.right_node)
-            right_value = right_visit_result.value
+            # we will need to handle the dot operator here instead of simply trying to evaluate the right side
+            if tree.op_token.type != TT_DOT:
+                right_visit_result = self._visit(tree.right_node)
+                right_value = right_visit_result.value
+            else:
+                if isinstance(tree.right_node, VarAccessNode):
+                    if type(left_value) == dict:
+                        if tree.right_node.id_token.text in left_value:
+                            return VisitResult(left_value[tree.right_node.id_token.text])
+                        else:
+                            return VisitResult(UNDEFINED)
+                    elif hasattr(left_value, tree.right_node.id_token.text):
+                        return VisitResult(left_value[tree.right_node.id_token.text])                
+                    else:
+                        raise ScriptRuntimeError(tree, str(left_value) + " has no member " + tree.right_node.id_token.text)
+                elif isinstance(tree.right_node, FunctionCallNode):
+                    if isinstance(tree.right_node.fn_expression, VarAccessNode):
+                        member_name = tree.right_node.fn_expression.id_token.text
+                        if type(left_value) == dict:
+                            if member_name in left_value:
+                                fn_call_node = FunctionCallNode(LiteralNode(left_value[member_name]), \
+                                    tree.right_node.arg_expressions, left_value)
+                                return self._visit(fn_call_node)
+                            else:
+                                raise ScriptRuntimeError(tree, str(left_value) + " has no method " + member_name)
+                        elif hasattr(left_value, member_name):
+                            fn_call_node = FunctionCallNode(LiteralNode(left_value[member_name]), tree.right_node.arg_expressions, left_value)
+                            return self._visit(fn_call_node)
+                        else:
+                            raise ScriptRuntimeError(tree, str(left_value) + " has no method " + member_name)
+                    else:
+                        raise ScriptRuntimeError(tree, "Method names must be valid identifiers")
+                
 
             result = UNDEFINED
 
@@ -268,6 +298,7 @@ TT_STAR             = "STAR"        # *
 TT_FSLASH           = "FSLASH"      # /
 TT_PERCENT          = "PERCENT"     # %
 TT_POW              = "POW"         # **
+TT_DOT              = "DOT"         # .
 TT_BIT_AND          = "BIT_AND"     # &
 TT_BIT_OR           = "BIT_OR"      # |
 TT_BIT_XOR          = "BIT_XOR"     # ^
@@ -516,6 +547,8 @@ class Lexer:
             token = Token(TT_SEMICOLON, self.position)
         elif self._current_char() == ',':
             token = Token(TT_COMMA, self.position)
+        elif self._current_char() == '.':
+            token = Token(TT_DOT, self.position)
         # EOF
         elif self._current_char() == '\0':
             token = Token(TT_EOF, self.position)
@@ -890,6 +923,11 @@ class Parser:
             left = FunctionCallNode(left, arg_expressions)
         # TODO this is where we will handle the dot operator as well as array access
         #      also where to handle postfix and prefix operator possibly
+        elif self._current_token.type == TT_DOT:
+            dot_token = self._current_token
+            self._advance()
+            right = self._primary_expr()
+            left = BinaryOpNode(dot_token, left, right)
         return left
 
     # helper functions
@@ -1015,9 +1053,10 @@ class ReturnStatementNode:
         return f"return {self.expression_node}"
 
 class FunctionCallNode:
-    def __init__(self, fn_expression, arg_expressions):
+    def __init__(self, fn_expression, arg_expressions, this=None):
         self.fn_expression = fn_expression # most likely should be a var access
         self.arg_expressions = arg_expressions
+        self.this = this
     def __repr__(self):
         rep = f"Function call: {self.fn_expression}("
         for arg in range(len(self.arg_expressions)):
