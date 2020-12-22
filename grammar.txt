@@ -31,7 +31,10 @@ statement       ::=     var-decl SEMICOLON
                         | KEYWORD:for LPAREN statement expr SEMICOLON expr RPAREN statement
                         | KEYWORD:break SEMICOLON
                         | KEYWORD:return expr? SEMICOLON
+                        | func-decl
                         | SEMICOLON # empty statement
+
+func-decl       ::=     KEYWORD:function IDENTIFIER LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN LBRACE statement* RBRACE
 
 block           ::=     LBRACE statement* RBRACE
 

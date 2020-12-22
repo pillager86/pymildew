@@ -8,7 +8,7 @@ class Interpreter:
     '''Holds a context for variables and evaluates scripts'''
     def __init__(self):
         '''Constructs a new Interpreter'''
-        self.global_context = ScriptContext(None)
+        self.global_context = ScriptContext(None, "global context")
         self.current_context = self.global_context
         # set builtins
         self.global_context.force_set_variable("parseInt", native_parseInt)
@@ -187,8 +187,36 @@ class Interpreter:
                     raise ScriptRuntimeError(tree, "Wrong number of args for native function. " \
                         + f"Expected {len(sig.parameters)} got {len(args_to_pass)}")
                 return VisitResult(fn_to_call.value(*args_to_pass))
+            # is this a ScriptFunction
+            elif isinstance(fn_to_call.value, ScriptFunction):
+                self.current_context = ScriptContext(self.current_context, fn_to_call.value.name)
+                # make sure the number of parameters is correct
+                if len(args_to_pass) != len(fn_to_call.value.arg_names):
+                    raise ScriptRuntimeError(tree, "Wrong number of args for function. " \
+                        + f"Expected {len(fn_to_call.value.arg_names)} got {len(args_to_pass)}")
+                # set up parameters as local variables by name
+                for i in range(len(args_to_pass)):
+                    self.current_context.force_set_variable(fn_to_call.value.arg_names[i], args_to_pass[i])
+                fn_result = VisitResult(UNDEFINED)
+                for statement_node in fn_to_call.value.statement_nodes:
+                    fn_result = self._visit(statement_node)
+                    # can't break or continue out of a function call so only check for return value
+                    if fn_result.return_flag:
+                        fn_result.return_flag = False
+                        break                
+                self.current_context = self.current_context.parent
+                return fn_result
             else:
                 raise ScriptRuntimeError(tree, "Cannot call a non function")
+        elif isinstance(tree, FunctionDeclarationNode):
+            arg_names = []
+            for arg_token in tree.arg_name_tokens:
+                arg_names.append(arg_token.text)
+            script_function = ScriptFunction(arg_names, tree.statement_nodes, tree.id_token.text)
+            # follows same rules as any variable declaration
+            if not self.current_context.declare_variable(tree.id_token.text, script_function):
+                raise ScriptRuntimeError(tree, "Function declaration cannot overwrite existing variable", tree.id_token)
+            return VisitResult(UNDEFINED)
         elif tree is None:
             return VisitResult(UNDEFINED) # nothing to do (empty statement)
         else:
@@ -272,9 +300,11 @@ KW_FOR              = "for"
 KW_BREAK            = "break"
 KW_CONTINUE         = "continue"
 KW_RETURN           = "return"
+KW_FUNCTION         = "function"
 KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_NULL, 
             KW_VAR, KW_LET, KW_IF, KW_ELSE, 
-            KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_CONTINUE, KW_RETURN]
+            KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_CONTINUE, KW_RETURN, 
+            KW_FUNCTION]
 
 ###############################################################################
 # LEXER CLASSES
@@ -700,6 +730,39 @@ class Parser:
             if self._current_token.type != TT_SEMICOLON:
                 raise ParseError(self.lexer.position, self._current_token, "Expected ';' after return statement")
             statement_node = ReturnStatementNode(expression_node)
+        # a function declaration?
+        elif self._current_token.is_keyword(KW_FUNCTION):
+            self._advance()
+            if self._current_token.type != TT_IDENTIFIER:
+                raise ParseError(self.lexer.position, self._current_token, "Expected identifier after function")
+            id_token = self._current_token
+            self._advance()
+            if self._current_token.type != TT_LPAREN:
+                raise ParseError(self.lexer.position, self._current_token, "Expected '(' after function name")
+            self._advance()
+            arg_name_tokens = []
+            while self._current_token.type != TT_RPAREN and self._current_token.type != TT_EOF:
+                if self._current_token.type != TT_IDENTIFIER:
+                    raise ParseError(self.lexer.position, self._current_token, "Function declaration parameters must be valid identifiers")
+                arg_name_tokens.append(self._current_token)
+                self._advance()
+                if self._current_token.type == TT_COMMA:
+                    self._advance()
+                elif self._current_token.type == TT_RPAREN:
+                    self._advance()
+                    break
+                else:
+                    raise ParseError(self.lexer.position, self._current_token, "Parameters must be separated by ','")
+            if self._current_token.type == TT_RPAREN:
+                self._advance()
+            if self._current_token.type != TT_LBRACE:
+                raise ParseError(self.lexer.position, self._current_token, "Function body must begin with '{'")
+            self._advance()
+            statement_nodes = []
+            while self._current_token.type != TT_RBRACE and self._current_token.type != TT_EOF:
+                statement_nodes.append(self._statement())
+            self._advance() # eat the }
+            statement_node = FunctionDeclarationNode(id_token, arg_name_tokens, statement_nodes)
         # could be an empty statement or program
         elif self._current_token.type == TT_SEMICOLON or self._current_token.type == TT_EOF:
             self._advance()
@@ -790,9 +853,9 @@ class Parser:
                 arg_expressions.append(self._expr())
                 if self._current_token.type == TT_COMMA:
                     self._advance()
-                elif self._current_token.type == TT_RPAREN:
-                    self._advance()
+                else:
                     break
+            self._advance()
             left = FunctionCallNode(left, arg_expressions)
         # TODO this is where we will handle the dot operator as well as array access
         #      also where to handle postfix and prefix operator possibly
@@ -1122,8 +1185,9 @@ class VarReference:
 
 class ScriptContext:
     # TODO a const table that will be checked on each var declare or assign attempt
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, name="<unnamed context>"):
         self.parent = parent
+        self.name = name
         self.variables = {}
 
     def access_variable(self, name):
