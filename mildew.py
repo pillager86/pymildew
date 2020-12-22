@@ -41,9 +41,11 @@ class Interpreter:
             return VisitResult(typesafe_unary_op(tree.op_token, value))
         elif isinstance(tree, BinaryOpNode):
             left_visit_result = self._visit(tree.left_node)
-            right_visit_result = self._visit(tree.right_node)
             left_value = left_visit_result.value
+            # TODO we will need to handle the dot operator here instead of simply trying to evaluate the right side
+            right_visit_result = self._visit(tree.right_node)
             right_value = right_visit_result.value
+
             result = UNDEFINED
 
             if tree.op_token.type == TT_ASSIGN:
@@ -52,7 +54,6 @@ class Interpreter:
                 self.current_context.reassign_variable(tree.left_node.id_token.text, right_value)
                 result = right_value
             else:
-                # raise ScriptRuntimeError(tree, "Unsupported binary operation", tree.op_token)
                 result = typesafe_binary_op(tree.op_token, left_value, right_value)
 
             # TODO propagate negative and positive infinity through typesafe math operations instead of erroring
@@ -122,7 +123,6 @@ class Interpreter:
         elif isinstance(tree, DoWhileStatementNode):
             loop_result = self._visit(tree.loop_statement) # do at least once
             condition_result = self._visit(tree.condition_node)
-            # TODO check and clear loop_result.continue_flag (does nothing right here)
             while condition_result.value:
                 if loop_result.break_flag:
                     loop_result.break_flag = False
@@ -175,7 +175,8 @@ class Interpreter:
         elif isinstance(tree, FunctionCallNode):
             fn_to_call = self._visit(tree.fn_expression)
             if fn_to_call.var_ref is None:
-                raise ScriptRuntimeError(tree, "Cannot call function " + str(fn_to_call.value))
+                # TODO delete this because we check at the end and . operations won't necessarily return a var ref
+                raise ScriptRuntimeError(tree, "Cannot call value " + str(fn_to_call.value))
             args_to_pass = []
             for arg in tree.arg_expressions:
                 arg_visit = self._visit(arg)
@@ -834,6 +835,36 @@ class Parser:
                 left = LiteralNode(UNDEFINED)
             elif self._current_token.text == KW_NULL:
                 left = LiteralNode(NULL)
+            elif self._current_token.text == KW_FUNCTION:
+                arg_names = []
+                statement_nodes = []
+                self._advance()
+                if self._current_token.type != TT_LPAREN:
+                    raise ParseError(self.lexer.position, self._current_token, "Expected '(' after function keyword")
+                self._advance()
+                while self._current_token.type != TT_RPAREN:
+                    if self._current_token.type != TT_IDENTIFIER:
+                        raise ParseError(self.lexer.position, self._current_token, "Anonymous function parameters must be valid identifiers")
+                    arg_names.append(self._current_token.text)
+                    self._advance()
+                    if self._current_token.type == TT_COMMA:
+                        self._advance()
+                    elif self._current_token.type == TT_RPAREN:
+                        self._advance()
+                        break
+                    else:
+                        raise ParseError(self.lexer.position, self._current_token, "Anonymous function parameters must be separated by ','")
+                if self._current_token.type == TT_RPAREN:
+                    self._advance()
+                if self._current_token.type != TT_LBRACE:
+                    raise ParseError(self.lexer.position, self._current_token, "Anonymous function body must begin with '{'")
+                self._advance()
+                while self._current_token.type != TT_RBRACE and self._current_token.type != TT_EOF:
+                    statement = self._statement()
+                    if statement is not None:
+                        statement_nodes.append(statement)
+                # don't advance } because we always advance on keywords at the end of the if-else block
+                left = LiteralNode(ScriptFunction(arg_names, statement_nodes))
             else:
                 raise ParseError(self._current_token.position, self._current_token, "Unexpected keyword")
             self._advance()
@@ -865,11 +896,11 @@ class Parser:
     def _advance(self):
         self._current_token = self.lexer.next_token()
 
-        
-
 ###############################################################################
 # NODES
 ###############################################################################
+
+# TODO add line number member to ALL statement nodes
 
 class BinaryOpNode:
     def __init__(self, op_token, left_node, right_node):

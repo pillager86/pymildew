@@ -52,6 +52,8 @@ expr            ::=     (NOT|PLUS|DASH) expr |
                         IDENTIFIER ASSIGN expr # TODO: make this separate rule or do something to invalidate `5 + a = 11;`
 
 primary-expr    ::=     LPAREN expr RPAREN | INTEGER | DOUBLE 
-                        | (KEYWORD:true|KEYWORD:false|KEYWORD:undefined|KEYWORD:null) | STRING | IDENTIFIER
+                        | (KEYWORD:true|KEYWORD:false|KEYWORD:undefined|KEYWORD:null) 
+                        | KEYWORD:function LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN LBRACE statement* RBRACE
+                        | STRING | IDENTIFIER
                         | primary-expr LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN
                         
