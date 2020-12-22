@@ -78,7 +78,7 @@ class Interpreter:
             visit_result = VisitResult(UNDEFINED)
             for each_node in tree.statement_nodes:
                 visit_result = self._visit(each_node)
-                if visit_result.break_flag or visit_result.return_flag:
+                if visit_result.break_flag or visit_result.return_flag or visit_result.continue_flag:
                     break
             self.current_context = self.current_context.parent
             return visit_result
@@ -109,18 +109,20 @@ class Interpreter:
             visit_result_condition = self._visit(tree.condition_node)
             loop_result = VisitResult(UNDEFINED)
             while visit_result_condition.value:
-                # TODO check for return value set and exit if so
                 loop_result = self._visit(tree.loop_statement)
                 if loop_result.break_flag:
                     loop_result.break_flag = False
                     break
                 if loop_result.return_flag:
                     break
+                if loop_result.continue_flag:
+                    loop_result.continue_flag = False
                 visit_result_condition = self._visit(tree.condition_node)
             return loop_result
         elif isinstance(tree, DoWhileStatementNode):
             loop_result = self._visit(tree.loop_statement) # do at least once
             condition_result = self._visit(tree.condition_node)
+            # TODO check and clear loop_result.continue_flag (does nothing right here)
             while condition_result.value:
                 if loop_result.break_flag:
                     loop_result.break_flag = False
@@ -128,6 +130,8 @@ class Interpreter:
                 if loop_result.return_flag:
                     break
                 loop_result = self._visit(tree.loop_statement)
+                if loop_result.continue_flag:
+                    loop_result.continue_flag = False
                 condition_result = self._visit(tree.condition_node)
             return loop_result
         elif isinstance(tree, ForStatementNode):
@@ -144,6 +148,8 @@ class Interpreter:
                     break
                 if body_result.return_flag:
                     break
+                if body_result.continue_flag:
+                    body_result.continue_flag = False
                 self._visit(tree.increment_node)
                 if tree.condition_node is None:
                     condition_result.value = True
@@ -154,6 +160,10 @@ class Interpreter:
         elif isinstance(tree, BreakStatementNode):
             visit_result = VisitResult(UNDEFINED)
             visit_result.break_flag = True
+            return visit_result
+        elif isinstance(tree, ContinueStatementNode):
+            visit_result = VisitResult(UNDEFINED)
+            visit_result.continue_flag = True
             return visit_result
         elif isinstance(tree, ReturnStatementNode):
             visit_result = VisitResult(UNDEFINED)
@@ -260,10 +270,11 @@ KW_WHILE            = "while"
 KW_DO               = "do"
 KW_FOR              = "for"
 KW_BREAK            = "break"
+KW_CONTINUE         = "continue"
 KW_RETURN           = "return"
 KEYWORDS = [KW_TRUE, KW_FALSE, KW_UNDEFINED, KW_NULL, 
             KW_VAR, KW_LET, KW_IF, KW_ELSE, 
-            KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_RETURN]
+            KW_WHILE, KW_DO, KW_FOR, KW_BREAK, KW_CONTINUE, KW_RETURN]
 
 ###############################################################################
 # LEXER CLASSES
@@ -673,6 +684,13 @@ class Parser:
             if self._current_token.type != TT_SEMICOLON:
                 raise ParseError(self.lexer.position, self._current_token, "Expected ';' after break")
             self._advance()
+        # a continue statement?
+        elif self._current_token.is_keyword(KW_CONTINUE):
+            statement_node = ContinueStatementNode(self._current_token)
+            self._advance()
+            if self._current_token.type != TT_SEMICOLON:
+                raise ParseError(self.lexer.position, self._current_token, "Expected ';' after continue")
+            self._advance()
         # a return statement?
         elif self._current_token.is_keyword(KW_RETURN):
             self._advance()
@@ -890,6 +908,12 @@ class BreakStatementNode:
     def __repr__(self):
         return "Break statement"
 
+class ContinueStatementNode:
+    def __init__(self, continue_token):
+        self.continue_token = continue_token
+    def __repr__(self):
+        return "Continue statement"
+
 class ReturnStatementNode:
     def __init__(self, expression_node = None):
         self.expression_node = expression_node
@@ -954,9 +978,10 @@ class VisitResult:
         self.return_value = UNDEFINED
         self.return_flag = False
         self.break_flag = False
+        self.continue_flag = False
     def __repr__(self):
         return f"value={self.value}, var_ref={self.var_ref}, return_value={self.return_value}, " \
-                + f"return_flag={self.return_flag}, break_flag={self.break_flag}"
+                + f"return_flag={self.return_flag}, break_flag={self.break_flag}, continue_flag={self.continue_flag}"
 
 ###############################################################################
 # TYPESAFE OPERATIONS
