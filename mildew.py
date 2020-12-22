@@ -58,6 +58,7 @@ class Interpreter:
                     else:
                         raise ScriptRuntimeError(tree, str(left_value) + " has no member " + tree.right_node.id_token.text)
                 elif isinstance(tree.right_node, FunctionCallNode):
+                    # nightmarish way of handling expr.member(...) we need to refactor primary-expr
                     if isinstance(tree.right_node.fn_expression, VarAccessNode):
                         member_name = tree.right_node.fn_expression.id_token.text
                         if type(left_value) == dict:
@@ -235,7 +236,7 @@ class Interpreter:
                 self.current_context = self.current_context.parent
                 return fn_result
             else:
-                raise ScriptRuntimeError(tree, "Cannot call a non function")
+                raise ScriptRuntimeError(tree, "Cannot call a non function " + str(type(fn_to_call.value)))
         elif isinstance(tree, FunctionDeclarationNode):
             arg_names = []
             for arg_token in tree.arg_name_tokens:
@@ -584,6 +585,8 @@ def unary_op_priority(token):
 
 def binary_op_priority(token):
     # see grammar.txt for explanation of magic constants
+    if token.type in [TT_DOT, TT_LPAREN]:
+        return 20
     if token.type == TT_POW:
         return 16
     elif token.type in [TT_STAR, TT_FSLASH, TT_PERCENT]:
@@ -811,6 +814,7 @@ class Parser:
         return statement_node
 
     def _expr(self, parent_precedence = 0):
+        # TODO there needs to be a way to handle .,[],() operators as a higher priority here
         left = None
 
         un_op_prec = unary_op_priority(self._current_token)
@@ -837,8 +841,19 @@ class Parser:
                 break
             token = self._current_token
             self._advance()
-            right = self._expr(prec)
-            left = BinaryOpNode(token, left, right)
+            if token.type == TT_LPAREN:
+                arg_expressions = []
+                while self._current_token.type != TT_RPAREN and self._current_token.type != TT_EOF:
+                    arg_expressions.append(self._expr())
+                    if self._current_token.type == TT_COMMA:
+                        self._advance()
+                    else:
+                        break
+                self._advance()
+                left = FunctionCallNode(left, arg_expressions)
+            else:
+                right = self._expr(prec)
+                left = BinaryOpNode(token, left, right)
 
         return left
 
@@ -909,25 +924,6 @@ class Parser:
             self._advance()
         else:
             raise ParseError(self._current_token.position, self._current_token, "Unexpected token")
-        # we have a primary-expr now see if there are parentheses turning this into a function call
-        if self._current_token.type == TT_LPAREN:
-            self._advance()
-            arg_expressions = []
-            while self._current_token.type != TT_RPAREN and self._current_token.type != TT_EOF:
-                arg_expressions.append(self._expr())
-                if self._current_token.type == TT_COMMA:
-                    self._advance()
-                else:
-                    break
-            self._advance()
-            left = FunctionCallNode(left, arg_expressions)
-        # TODO this is where we will handle the dot operator as well as array access
-        #      also where to handle postfix and prefix operator possibly
-        elif self._current_token.type == TT_DOT:
-            dot_token = self._current_token
-            self._advance()
-            right = self._primary_expr()
-            left = BinaryOpNode(dot_token, left, right)
         return left
 
     # helper functions
