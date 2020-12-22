@@ -174,9 +174,6 @@ class Interpreter:
             return visit_result
         elif isinstance(tree, FunctionCallNode):
             fn_to_call = self._visit(tree.fn_expression)
-            if fn_to_call.var_ref is None:
-                # TODO delete this because we check at the end and . operations won't necessarily return a var ref
-                raise ScriptRuntimeError(tree, "Cannot call value " + str(fn_to_call.value))
             args_to_pass = []
             for arg in tree.arg_expressions:
                 arg_visit = self._visit(arg)
@@ -593,7 +590,10 @@ class Parser:
             stmts.append(self._statement())
         return stmts
 
-    # grammar rules
+    # grammar rules 
+    # TODO refactor common parsing such as {} into a single method that returns a statement_node array
+    # TODO refactor collecting (IDENTIFIER (COMMA IDENTIFIER)*)? into a single method that returns a token array
+    # TODO in _primary_expr each keyword case should advance rather than advancing at the end of the if block
 
     def _statement(self):
         statement_node = None
